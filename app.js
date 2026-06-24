@@ -17,15 +17,15 @@
 ───────────────────────────────────────────────────────────── */
 const OPENCV_DICT_4X4_50  = 0;   // cv.DICT_4X4_50 enum value
 const SHEET_W_MM          = 100.0; // distancia horizontal (centro ID0 → centro ID1)
-const SHEET_H_MM          = 160.0; // distancia vertical  (centro ID0 → centro ID2)
+const SHEET_H_MM          = 170.0; // distancia vertical  (centro ID0 → centro ID2)
 
 // Coordenadas destino teóricas de los centros de los marcadores (en mm)
 // Orden: [ID0=SupIzq, ID1=SupDer, ID2=InfIzq, ID3=InfDer]
 const TARGET_MM = [
   [10,  10],  // ID 0 — SupIzq
   [110, 10],  // ID 1 — SupDer
-  [10,  170], // ID 2 — InfIzq
-  [110, 170], // ID 3 — InfDer
+  [10,  180], // ID 2 — InfIzq
+  [110, 180], // ID 3 — InfDer
 ];
 
 const GRID_STEP_PX    = 20;   // paso del barrido de la grilla (px)

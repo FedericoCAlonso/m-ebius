@@ -76,6 +76,7 @@ const state = {
   
   measurements:  [],      // [{id, planeLabel, refName, distMm, points: [{x,y}, {x,y}]}]
   measIdCounter: 0,
+  snapEnabled: false,
   
   viewer: {
     scale: 1,
@@ -808,12 +809,68 @@ function initViewer(width, height) {
   let pendingPoint = null;
   let currentTouchPoint = null; // Para mostrar el cursor desplazado en touch
 
+  function findNearestEdge(x, y, radius) {
+  const src = state.originalImageMat;
+  if (!src) return null;
+  const ix = Math.round(x);
+  const iy = Math.round(y);
+  let rx = Math.max(0, ix - radius);
+  let ry = Math.max(0, iy - radius);
+  let rw = radius * 2;
+  let rh = radius * 2;
+  if (rx + rw > src.cols) rw = src.cols - rx;
+  if (ry + rh > src.rows) rh = src.rows - ry;
+  if (rw <= 0 || rh <= 0) return null;
+  
+  const rect = new cv.Rect(rx, ry, rw, rh);
+  const roi = src.roi(rect);
+  
+  const gray = new cv.Mat();
+  cv.cvtColor(roi, gray, cv.COLOR_RGBA2GRAY);
+  const blur = new cv.Mat();
+  cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
+  const edges = new cv.Mat();
+  cv.Canny(blur, edges, 50, 150);
+  
+  let closestDist = Infinity;
+  let closestX = -1;
+  let closestY = -1;
+  const cx = ix - rx;
+  const cy = iy - ry;
+  for (let r = 0; r < edges.rows; r++) {
+    for (let c = 0; c < edges.cols; c++) {
+      if (edges.ucharPtr(r, c)[0] > 128) {
+        const dist = Math.hypot(c - cx, r - cy);
+        if (dist < closestDist) {
+          closestDist = dist;
+          closestX = c;
+          closestY = r;
+        }
+      }
+    }
+  }
+  
+  roi.delete(); gray.delete(); blur.delete(); edges.delete();
+  if (closestDist < radius) {
+    return { x: rx + closestX, y: ry + closestY };
+  }
+  return null;
+}
+
   function processClickPoint(clickX, clickY) {
-    const imgX = (clickX - state.viewer.offsetX) / state.viewer.scale;
-    const imgY = (clickY - state.viewer.offsetY) / state.viewer.scale;
+    let imgX = (clickX - state.viewer.offsetX) / state.viewer.scale;
+    let imgY = (clickY - state.viewer.offsetY) / state.viewer.scale;
 
     const plane = state.planes[state.activePlaneIndex];
     if (!plane) return null;
+
+    if (state.snapEnabled && state.originalImageMat) {
+      const snapObj = findNearestEdge(imgX, imgY, 40);
+      if (snapObj) {
+        imgX = snapObj.x;
+        imgY = snapObj.y;
+      }
+    }
 
     const H = plane.H;
     const H_data = H.data64F;
@@ -1367,6 +1424,9 @@ function clearResults() {
   renderMeasurementTable();
 }
 
+
+let levelListener = null;
+
 /* ─────────────────────────────────────────────────────────────
    CÁMARA (getUserMedia)
 ───────────────────────────────────────────────────────────── */
@@ -1390,6 +1450,67 @@ async function openCamera() {
     await video.play();
     overlay.classList.add('visible');
 
+    const levelContainer = document.getElementById('camera-level-container');
+    const bubble = document.getElementById('camera-level-bubble');
+    const text = document.getElementById('camera-level-text');
+    const btnEnable = document.getElementById('btn-enable-sensors');
+    
+    if(levelContainer) levelContainer.style.opacity = '1';
+
+    function handleOrientation(event) {
+      if (event.beta === null || event.gamma === null) return;
+      let beta = event.beta; 
+      let gamma = event.gamma; 
+      
+      let pErr = beta - 90;
+      let rErr = gamma;
+      
+      const maxMove = 30; 
+      let bx = (rErr / 45) * maxMove; 
+      let by = (pErr / 45) * maxMove;
+      
+      const dist = Math.hypot(bx, by);
+      if (dist > maxMove) {
+        bx = (bx/dist)*maxMove;
+        by = (by/dist)*maxMove;
+      }
+      
+      if(bubble) bubble.style.transform = `translate(calc(-50% + ${bx}px), calc(-50% + ${by}px))`;
+      
+      const isLevel = Math.abs(pErr) < 3 && Math.abs(rErr) < 3;
+      if (isLevel) {
+        if(bubble) bubble.style.backgroundColor = '#4ade80';
+        if(text) { text.style.color = '#4ade80'; text.innerText = '¡NIVELADO!'; }
+      } else {
+        if(bubble) bubble.style.backgroundColor = '#fff';
+        if(text) { text.style.color = '#fff'; text.innerText = `${Math.abs(pErr).toFixed(0)}° v / ${Math.abs(rErr).toFixed(0)}° h`; }
+      }
+    }
+    
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+      if(btnEnable) {
+        btnEnable.style.display = 'block';
+        if(text) text.innerText = 'Permiso requerido';
+        btnEnable.onclick = () => {
+          DeviceOrientationEvent.requestPermission()
+            .then(res => {
+              if (res === 'granted') {
+                btnEnable.style.display = 'none';
+                window.addEventListener('deviceorientation', handleOrientation);
+                levelListener = handleOrientation;
+              } else {
+                if(text) text.innerText = 'Permiso denegado';
+              }
+            })
+            .catch(console.error);
+        };
+      }
+    } else {
+      window.addEventListener('deviceorientation', handleOrientation);
+      levelListener = handleOrientation;
+    }
+
+
   } catch (err) {
     console.error('[Möbius] Camera error:', err);
     const msg = err.name === 'NotAllowedError'
@@ -1409,6 +1530,14 @@ function closeCamera() {
   }
   video.srcObject = null;
   overlay.classList.remove('visible');
+
+  const levelContainer = document.getElementById('camera-level-container');
+  if(levelContainer) levelContainer.style.opacity = '0';
+  if (levelListener) {
+    window.removeEventListener('deviceorientation', levelListener);
+    levelListener = null;
+  }
+
 }
 
 function captureFrame() {
@@ -1546,6 +1675,133 @@ function initUI() {
       }
     }
   });
+
+  // Snap Toggle
+  const btnSnap = document.getElementById('btn-snap-toggle');
+  if(btnSnap) {
+    btnSnap.onclick = () => {
+      state.snapEnabled = !state.snapEnabled;
+      if (state.snapEnabled) {
+        btnSnap.style.background = 'var(--primary)';
+        btnSnap.style.color = 'white';
+        toast('Imantado a bordes ACTIVADO', 'info');
+      } else {
+        btnSnap.style.background = 'var(--surface)';
+        btnSnap.style.color = 'var(--text-secondary)';
+        toast('Imantado a bordes DESACTIVADO', 'info');
+      }
+    };
+  }
+
+  // Exportar CSV
+  const btnCsv = document.getElementById('btn-export-csv');
+  if(btnCsv) {
+    btnCsv.onclick = () => {
+      if (state.measurements.length === 0) return toast('No hay mediciones para exportar', 'error');
+      let csv = 'ID,Plano,Referencia,Distancia (mm)\\n';
+      state.measurements.forEach(m => {
+        csv += `${m.id},${m.planeLabel},${m.refName || ''},${m.distMm.toFixed(2)}\\n`;
+      });
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'mediciones_mobius.csv';
+      a.click();
+    };
+  }
+
+  // Guardar Proyecto
+  const btnSaveProj = document.getElementById('btn-save-project');
+  if(btnSaveProj) {
+    btnSaveProj.onclick = () => {
+      if (!state.imgBase64) return toast('No hay un proyecto abierto.', 'error');
+      showProcessing('Guardando Proyecto...', 'Preparando archivo JSON');
+      setTimeout(() => {
+        const proj = {
+          version: 1,
+          imgBase64: state.imgBase64,
+          planes: state.planes.map(p => ({
+            id: p.id, label: p.label,
+            H_data: Array.from(p.H.data64F),
+            templateW: p.template.w_mm, templateH: p.template.h_mm
+          })),
+          measurements: state.measurements,
+          measIdCounter: state.measIdCounter
+        };
+        const blob = new Blob([JSON.stringify(proj)], { type: 'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'proyecto_mobius.json';
+        a.click();
+        hideProcessing();
+        toast('Proyecto guardado con éxito', 'success');
+      }, 100);
+    };
+  }
+
+  // Cargar Proyecto
+  const btnLoadProj = document.getElementById('btn-load-project');
+  const inputProj = document.getElementById('project-input');
+  if(btnLoadProj && inputProj) {
+    btnLoadProj.onclick = () => inputProj.click();
+    inputProj.onchange = e => {
+      const file = e.target.files[0];
+      if (!file) return;
+      showProcessing('Cargando Proyecto...', 'Leyendo archivo');
+      const reader = new FileReader();
+      reader.onload = async ev => {
+        try {
+          const proj = JSON.parse(ev.target.result);
+          if (!proj.imgBase64) throw new Error('Formato inválido');
+          
+          state.processing = true;
+          clearResults();
+          document.getElementById('upload-view').classList.add('hidden');
+          document.getElementById('workspace-view').classList.add('visible');
+          document.getElementById('measurements-section').classList.add('visible');
+          
+          state.imgBase64 = proj.imgBase64;
+          const img = new Image();
+          img.src = state.imgBase64;
+          await new Promise(r => img.onload = r);
+          
+          state.originalImg = img;
+          const mat = cv.imread(img);
+          cv.cvtColor(mat, mat, cv.COLOR_RGBA2RGB);
+          state.originalImageMat = mat.clone();
+          
+          // Reconstruir planos
+          state.planes = proj.planes.map(p => {
+            const H = new cv.Mat(3, 3, cv.CV_64F);
+            for(let i=0; i<9; i++) H.data64F[i] = p.H_data[i];
+            const H_inv = new cv.Mat();
+            cv.invert(H, H_inv);
+            return {
+              id: p.id, label: p.label, H, H_inv,
+              template: { w_mm: p.templateW, h_mm: p.templateH }
+            };
+          });
+          
+          state.measurements = proj.measurements || [];
+          state.measIdCounter = proj.measIdCounter || state.measurements.length;
+          
+          renderPlanesList();
+          if(state.planes.length > 0) selectPlane(0);
+          renderMeasurementTable();
+          
+          hideProcessing();
+          state.processing = false;
+          toast('Proyecto cargado', 'success');
+        } catch(e) {
+          hideProcessing();
+          state.processing = false;
+          toast('Error al leer proyecto', 'error');
+        }
+      };
+      reader.readAsText(file);
+    };
+  }
+
 }
 
 /* ─────────────────────────────────────────────────────────────
@@ -1617,10 +1873,27 @@ function printTemplateSheet(templateName) {
           height: ${pageSize.h}mm; 
           margin: 0 auto;
           box-sizing: border-box;
-          border: 1px dashed #ccc; /* Guía de corte / borde visual */
           background: #fff;
           overflow: hidden;
           page-break-after: always;
+        }
+        .safe-zone {
+          position: absolute;
+          top: 10mm; left: 10mm; right: 10mm; bottom: 10mm;
+          border: 2px dashed #bbb;
+          border-radius: 8mm;
+          pointer-events: none;
+        }
+        .safe-zone::before {
+          content: 'ZONA PARA CINTA';
+          position: absolute;
+          top: -3mm; left: 50%; transform: translateX(-50%);
+          background: #fff;
+          padding: 0 10px;
+          color: #999;
+          font-size: 12px;
+          font-weight: bold;
+          letter-spacing: 2px;
         }
         .marker {
           position: absolute;
@@ -1661,6 +1934,7 @@ function printTemplateSheet(templateName) {
       </div>
 
       <div class="page">
+        <div class="safe-zone"></div>
         ${tpl.targets.map((target, idx) => {
           const x = target[0] + offsetX; 
           const y = target[1] + offsetY;

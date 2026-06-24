@@ -84,7 +84,9 @@
   </a>
 
   <div style="flex: 1;"></div>
-  <button id="btn-show-print-modal" class="btn btn-secondary" style="margin-right: 15px; font-size: 13px; padding: 4px 10px;" onclick="document.getElementById('modal-print').showModal()">🖨️ Hojas</button>
+  
+  <button id="btn-save-project" class="btn btn-secondary" style="margin-right: 10px; font-size: 13px; padding: 4px 10px;" title="Guardar Proyecto Local">💾 Guardar</button>
+  <button id="btn-show-print-modal" class="btn btn-secondary" style="margin-right: 15px; font-size: 13px; padding: 4px 10px;">🖨️ Hojas</button>
 
   <div class="header-status" role="status" aria-live="polite">
     <span class="status-dot loading" id="status-dot" aria-hidden="true"></span>
@@ -155,6 +157,10 @@
       <div>
         <p class="drop-title">Arrastrá la foto aquí</p>
         <p class="drop-sub">o usá los botones de abajo · Formatos: JPG, PNG, WEBP</p>
+        <!-- BOTON DE CARGAR PROYECTO -->
+        <button id="btn-load-project" class="btn btn-ghost" style="margin-top: 10px;">
+          📂 Cargar Proyecto (.json)
+        </button>
       </div>
 
       <div class="drop-actions">
@@ -182,6 +188,7 @@
       accept="image/jpeg,image/png,image/webp,image/*"
       aria-hidden="true"
     />
+    <input type="file" id="project-input" accept=".json" style="display: none;" />
   </section>
 
   <!-- ── ESPACIO DE TRABAJO (Modo Proyección) ────────────── -->
@@ -222,6 +229,7 @@
         </div>
         <!-- Controles de Visor flotantes -->
         <div class="viewer-controls">
+          <button class="btn btn-icon" id="btn-snap-toggle" title="Imantado a Bordes (Activado)" style="background: var(--primary); color: white;">🧲</button>
           <button class="btn btn-icon" id="btn-zoom-in" title="Acercar">＋</button>
           <button class="btn btn-icon" id="btn-zoom-out" title="Alejar">－</button>
           <button class="btn btn-icon" id="btn-zoom-fit" title="Ajustar">⛶</button>
@@ -284,7 +292,25 @@
      OVERLAY DE CÁMARA
 ══════════════════════════════════════════════════════════ -->
 <div id="camera-overlay" role="dialog" aria-modal="true" aria-label="Captura de cámara">
-  <video id="camera-video" autoplay playsinline muted aria-label="Vista previa de la cámara"></video>
+  <div class="camera-wrapper" style="position: relative; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: #000;">
+    <video id="camera-video" autoplay playsinline muted aria-label="Vista previa de la cámara" style="max-height: 100%; width: 100%; object-fit: contain;"></video>
+    
+    <!-- Acelerómetro / Nivel de Burbuja -->
+    <div id="camera-level-container" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); pointer-events: none; opacity: 0; transition: opacity 0.3s; display: flex; flex-direction: column; align-items: center; justify-content: center;">
+      <div id="camera-level-crosshair" style="width: 60px; height: 60px; border: 2px solid rgba(255,255,255,0.7); border-radius: 50%; position: relative;">
+        <div id="camera-level-bubble" style="width: 16px; height: 16px; background: #fff; border-radius: 50%; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); transition: transform 0.1s linear, background-color 0.2s;"></div>
+        <!-- Líneas guía -->
+        <div style="position: absolute; top: 50%; left: -10px; width: 10px; height: 2px; background: rgba(255,255,255,0.7); transform: translateY(-50%);"></div>
+        <div style="position: absolute; top: 50%; right: -10px; width: 10px; height: 2px; background: rgba(255,255,255,0.7); transform: translateY(-50%);"></div>
+        <div style="position: absolute; left: 50%; top: -10px; width: 2px; height: 10px; background: rgba(255,255,255,0.7); transform: translateX(-50%);"></div>
+        <div style="position: absolute; left: 50%; bottom: -10px; width: 2px; height: 10px; background: rgba(255,255,255,0.7); transform: translateX(-50%);"></div>
+      </div>
+      <div id="camera-level-text" style="color: white; font-family: monospace; font-size: 14px; margin-top: 15px; background: rgba(0,0,0,0.5); padding: 4px 8px; border-radius: 4px; text-shadow: 1px 1px 2px black;">Activando sensores...</div>
+      <!-- Permiso iOS -->
+      <button id="btn-enable-sensors" class="btn btn-primary btn-sm" style="margin-top: 15px; display: none; pointer-events: auto;">Habilitar Sensores</button>
+    </div>
+  </div>
+
   <div class="camera-controls">
     <button class="btn btn-primary" id="btn-capture" type="button">
       <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18" aria-hidden="true">

@@ -83,6 +83,9 @@
     <span class="header-title">Möbius<span>.</span></span>
   </a>
 
+  <div style="flex: 1;"></div>
+  <button id="btn-show-print-modal" class="btn btn-secondary" style="margin-right: 15px; font-size: 13px; padding: 4px 10px;" onclick="document.getElementById('modal-print').showModal()">🖨️ Hojas</button>
+
   <div class="header-status" role="status" aria-live="polite">
     <span class="status-dot loading" id="status-dot" aria-hidden="true"></span>
     <span id="status-text">Cargando OpenCV…</span>
@@ -297,6 +300,25 @@
      CONTENEDOR DE TOASTS
 ══════════════════════════════════════════════════════════ -->
 <div id="toast-container" aria-live="polite" aria-atomic="false"></div>
+
+<!-- ══════════════════════════════════════════════════════════
+     MODAL DE IMPRESIÓN
+══════════════════════════════════════════════════════════ -->
+<dialog id="modal-print" aria-labelledby="modal-print-title" style="border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); color: var(--text-primary); padding: 20px; max-width: 400px; margin: auto;">
+  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+    <h2 id="modal-print-title" style="margin: 0; font-size: 18px; color: var(--text-primary);">Imprimir Hojas de Referencia</h2>
+    <button class="btn btn-ghost" onclick="document.getElementById('modal-print').close()" aria-label="Cerrar modal" style="padding: 4px;">✕</button>
+  </div>
+  <p style="font-size: 14px; color: var(--text-secondary); margin-bottom: 20px;">
+    Seleccioná el tamaño de hoja que vas a usar. Se generará una página lista para enviar a la impresora. <br><br>
+    <b>Importante:</b> Asegurate de imprimir al 100% de escala (sin márgenes automáticos) para mantener la precisión.
+  </p>
+  <div style="display: flex; flex-direction: column; gap: 10px;">
+    <button class="btn btn-primary" onclick="printTemplateSheet('A5'); document.getElementById('modal-print').close()">Imprimir A5 (148 x 210 mm)</button>
+    <button class="btn btn-primary" onclick="printTemplateSheet('A4'); document.getElementById('modal-print').close()">Imprimir A4 (210 x 297 mm)</button>
+    <button class="btn btn-primary" onclick="printTemplateSheet('A3'); document.getElementById('modal-print').close()">Imprimir A3 (297 x 420 mm)</button>
+  </div>
+</dialog>
 
 <!-- ══════════════════════════════════════════════════════════
      SCRIPTS

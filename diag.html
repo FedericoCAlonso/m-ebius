@@ -1,0 +1,59 @@
+﻿<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>Diagnóstico ArUco</title>
+<style>body{font-family:monospace;background:#111;color:#eee;padding:20px;}
+.ok{color:#34d399;}.err{color:#f87171;}.warn{color:#fbbf24;}</style>
+</head>
+<body>
+<h2>Diagnóstico OpenCV.js — ArUco</h2>
+<div id="log"></div>
+<script>
+function log(msg, cls=''){document.getElementById('log').innerHTML+=`<div class="${cls}">${msg}</div>`;}
+
+window.Module = {
+  onRuntimeInitialized() {
+    log('✓ OpenCV.js cargado. Version: ' + cv.getBuildInformation().split('\n')[0], 'ok');
+    
+    // Test ArUco API
+    const checks = [
+      ['cv.DICT_4X4_50', () => typeof cv.DICT_4X4_50],
+      ['cv.getPredefinedDictionary', () => typeof cv.getPredefinedDictionary],
+      ['cv.aruco_DetectorParameters', () => typeof cv.aruco_DetectorParameters],
+      ['cv.aruco_ArucoDetector', () => typeof cv.aruco_ArucoDetector],
+      ['cv.warpPerspective', () => typeof cv.warpPerspective],
+      ['cv.findHomography', () => typeof cv.findHomography],
+      ['cv.adaptiveThreshold', () => typeof cv.adaptiveThreshold],
+      ['cv.findContours', () => typeof cv.findContours],
+    ];
+    
+    checks.forEach(([name, fn]) => {
+      try {
+        const t = fn();
+        const ok = t === 'function' || t === 'number';
+        log(`${ok?'✓':'✗'} ${name}: ${t}`, ok?'ok':'err');
+      } catch(e) {
+        log(`✗ ${name}: ERROR — ${e.message}`, 'err');
+      }
+    });
+    
+    // Try creating a dictionary
+    try {
+      const d = cv.getPredefinedDictionary(0);
+      log('✓ getPredefinedDictionary(0) funcionó!', 'ok');
+      d.delete();
+    } catch(e) {
+      log('✗ getPredefinedDictionary falló: ' + e.message, 'err');
+    }
+  }
+};
+
+document.addEventListener('DOMContentLoaded', () => {
+  log('Cargando opencv.js local...', 'warn');
+  const s = document.createElement('script');
+  s.src = './opencv.js';
+  s.onerror = () => log('✗ No se pudo cargar ./opencv.js', 'err');
+  document.head.appendChild(s);
+});
+</script>
+</body>
+</html>

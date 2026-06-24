@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="description" content="Rectificación offline de perspectiva con marcadores ArUco en hojas A5. Procesamiento 100% local con OpenCV.js." />
+  <meta name="theme-color" content="#6ee7f7" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Möbius" />
+
+  <title>Möbius — Rectificación de Perspectiva</title>
+
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <link rel="stylesheet" href="style.css" />
+
+  <!--
+    OpenCV.js se carga de forma asíncrona.
+    El Service Worker lo cacheará en la primera carga para uso offline.
+    window.Module.onRuntimeInitialized se llama cuando el WASM está listo.
+  -->
+  <script>
+    /*
+     * Loader de OpenCV.js con fallback multi-fuente.
+     * Orden de intento:
+     *   1️⃣  ./opencv.js   ← archivo local (modo offline completo)
+     *   2️⃣  CDN 4.10.0    ← primera conexión
+     *   3️⃣  CDN 4.8.0     ← fallback alternativo
+     *
+     * Para uso offline garantizado: descargá opencv.js desde
+     * https://docs.opencv.org/4.10.0/opencv.js
+     * y colocálo en la misma carpeta que index.html.
+     */
+    window.Module = {
+      onRuntimeInitialized() {
+        document.dispatchEvent(new CustomEvent('opencvReady'));
+      }
+    };
+
+    const CV_SOURCES = [
+      './opencv.js',
+      'https://docs.opencv.org/4.8.0/opencv.js',
+      'https://docs.opencv.org/4.5.5/opencv.js',
+    ];
+
+    let _cvSourceIdx = 0;
+
+    function _tryLoadCV() {
+      if (_cvSourceIdx >= CV_SOURCES.length) {
+        document.dispatchEvent(new CustomEvent('opencvLoadFailed'));
+        return;
+      }
+      const src    = CV_SOURCES[_cvSourceIdx++];
+      const script = document.createElement('script');
+      script.src = src;
+      if (src.startsWith('http')) script.crossOrigin = 'anonymous';
+
+      script.onerror = () => {
+        console.warn('[Möbius] OpenCV no cargó desde:', src);
+        script.remove();
+        _tryLoadCV(); // siguiente fuente
+      };
+
+      document.head.appendChild(script);
+    }
+
+    // Arrancar en cuanto el DOM esté listo
+    document.addEventListener('DOMContentLoaded', _tryLoadCV);
+  </script>
+</head>
+
+<body>
+
+<!-- ══════════════════════════════════════════════════════════
+     HEADER
+══════════════════════════════════════════════════════════ -->
+<header role="banner">
+  <a href="./" class="header-logo" aria-label="Möbius inicio">
+    <img src="icons/icon-192.png" alt="" class="header-logo-icon" width="28" height="28" />
+    <span class="header-title">Möbius<span>.</span></span>
+  </a>
+
+  <div class="header-status" role="status" aria-live="polite">
+    <span class="status-dot loading" id="status-dot" aria-hidden="true"></span>
+    <span id="status-text">Cargando OpenCV…</span>
+  </div>
+</header>
+
+<!-- ══════════════════════════════════════════════════════════
+     CONTENIDO PRINCIPAL
+══════════════════════════════════════════════════════════ -->
+<main id="app-main" role="main">
+
+  <!-- ── PANEL DE ERROR DE OPENCV ────────────────────────── -->
+  <div id="cv-error-panel" class="hidden" role="alert" aria-live="assertive">
+    <div class="cv-error-icon" aria-hidden="true">⚠️</div>
+    <div class="cv-error-body">
+      <strong>OpenCV.js no pudo cargarse</strong>
+      <p>
+        No hay conexión o el CDN no está disponible.<br>
+        Para uso <strong>100% offline</strong>, descargá el archivo
+        <code>opencv.js</code> (~8 MB) y colocálo en la misma carpeta que
+        <code>index.html</code>:
+      </p>
+      <div class="cv-error-actions">
+        <a
+          href="https://docs.opencv.org/4.8.0/opencv.js"
+          download="opencv.js"
+          class="btn btn-primary"
+          id="btn-download-cv"
+          target="_blank"
+          rel="noopener"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/>
+          </svg>
+          Descargar opencv.js (8 MB)
+        </a>
+        <button class="btn btn-secondary" id="btn-retry-cv" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/>
+          </svg>
+          Reintentar
+        </button>
+      </div>
+      <p class="cv-error-note">
+        Una vez descargado, recargá la página. El archivo local tiene prioridad sobre el CDN.
+      </p>
+    </div>
+  </div>
+
+  <!-- ── VISTA DE CARGA (Oculta tras procesar) ────────────── -->
+  <section id="upload-view" aria-labelledby="upload-heading">
+    <h1 class="sr-only" id="upload-heading">Cargar imagen para rectificar</h1>
+
+    <div
+      id="drop-zone"
+      role="button"
+      tabindex="0"
+      aria-label="Arrastrá una imagen aquí o hacé clic para seleccionar"
+      class="disabled"
+    >
+      <!-- Ícono SVG de carga -->
+      <svg class="drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round"
+          d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/>
+      </svg>
+
+      <div>
+        <p class="drop-title">Arrastrá la foto aquí</p>
+        <p class="drop-sub">o usá los botones de abajo · Formatos: JPG, PNG, WEBP</p>
+      </div>
+
+      <div class="drop-actions">
+        <button class="btn btn-primary" id="btn-file" type="button" disabled>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z"/>
+          </svg>
+          Seleccionar archivo
+        </button>
+
+        <button class="btn btn-secondary" id="btn-camera" type="button" disabled>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6.827 6.175A2.31 2.31 0 015.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 00-1.134-.175 2.31 2.31 0 01-1.64-1.055l-.822-1.316a2.192 2.192 0 00-1.736-1.039 48.774 48.774 0 00-5.232 0 2.192 2.192 0 00-1.736 1.039l-.821 1.316z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 12.75a4.5 4.5 0 11-9 0 4.5 4.5 0 019 0zM18.75 10.5h.008v.008h-.008V10.5z"/>
+          </svg>
+          Usar cámara
+        </button>
+      </div>
+    </div>
+
+    <!-- Input file oculto -->
+    <input
+      type="file"
+      id="file-input"
+      accept="image/jpeg,image/png,image/webp,image/*"
+      aria-hidden="true"
+    />
+  </section>
+
+  <!-- ── ESPACIO DE TRABAJO (Modo Proyección) ────────────── -->
+  <section id="workspace-view" aria-labelledby="workspace-heading">
+    <h2 class="sr-only" id="workspace-heading">Área de Medición</h2>
+    
+    <div class="workspace-layout">
+      <!-- Barra lateral de Planos -->
+      <aside class="planes-sidebar" aria-label="Planos detectados">
+        <div class="sidebar-header">
+          <h3>Planos Activos</h3>
+          <span class="planes-badge" id="planes-count">0</span>
+        </div>
+        <div id="planes-list" class="planes-list" role="tablist">
+          <!-- Botones de planos se inyectan acá -->
+        </div>
+        <div class="sidebar-actions">
+          <button class="btn btn-secondary btn-sm" id="btn-export-png" type="button" style="width: 100%;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/>
+            </svg>
+            Exportar Vista Plana
+          </button>
+          <button class="btn btn-ghost btn-sm" id="btn-reset" type="button" style="width: 100%;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/>
+            </svg>
+            Nueva Foto
+          </button>
+        </div>
+      </aside>
+
+      <!-- Visor central con Zoom/Pan -->
+      <div class="viewer-wrapper" id="viewer-wrapper">
+        <div class="viewer-container" id="viewer-container">
+          <canvas id="main-image-canvas" class="main-canvas" aria-label="Foto Original"></canvas>
+          <canvas id="overlay-canvas" class="overlay-canvas" aria-label="Capa de Cuadrícula y Medición"></canvas>
+        </div>
+        <!-- Controles de Visor flotantes -->
+        <div class="viewer-controls">
+          <button class="btn btn-icon" id="btn-zoom-in" title="Acercar">＋</button>
+          <button class="btn btn-icon" id="btn-zoom-out" title="Alejar">－</button>
+          <button class="btn btn-icon" id="btn-zoom-fit" title="Ajustar">⛶</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── TABLA DE MEDICIONES ──────────────────────────────── -->
+  <section id="measurements-section" aria-labelledby="meas-heading">
+    <div class="results-header" style="margin-top: 1rem;">
+      <h2 class="results-title" id="meas-heading">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5"/>
+        </svg>
+        Mediciones
+      </h2>
+      <div class="results-actions">
+        <button class="btn btn-ghost btn-sm" id="btn-clear-meas" type="button">
+          Limpiar todo
+        </button>
+        <button class="btn btn-primary btn-sm" id="btn-export-csv" type="button">
+          Exportar CSV
+        </button>
+      </div>
+    </div>
+
+    <div class="meas-table-wrapper" role="region" aria-label="Tabla de mediciones">
+      <table class="meas-table">
+        <thead>
+          <tr>
+            <th scope="col">#</th>
+            <th scope="col">Plano</th>
+            <th scope="col" style="width: 30%">Referencia</th>
+            <th scope="col">Distancia</th>
+            <th scope="col">Acciones</th>
+          </tr>
+        </thead>
+        <tbody id="meas-tbody">
+          <tr>
+            <td colspan="5" class="meas-empty">Hacé clic en dos puntos del plano activo para medir.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+</main><!-- /main -->
+
+<!-- ══════════════════════════════════════════════════════════
+     OVERLAY DE PROCESAMIENTO
+══════════════════════════════════════════════════════════ -->
+<div id="processing-overlay" role="dialog" aria-modal="true" aria-labelledby="proc-label">
+  <div class="spinner" aria-hidden="true"></div>
+  <p class="processing-label" id="proc-label">Procesando imagen…</p>
+  <p class="processing-sub" id="proc-sub">Detectando marcadores ArUco</p>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════
+     OVERLAY DE CÁMARA
+══════════════════════════════════════════════════════════ -->
+<div id="camera-overlay" role="dialog" aria-modal="true" aria-label="Captura de cámara">
+  <video id="camera-video" autoplay playsinline muted aria-label="Vista previa de la cámara"></video>
+  <div class="camera-controls">
+    <button class="btn btn-primary" id="btn-capture" type="button">
+      <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18" aria-hidden="true">
+        <circle cx="12" cy="12" r="8"/>
+      </svg>
+      Capturar
+    </button>
+    <button class="btn btn-ghost" id="btn-camera-cancel" type="button">Cancelar</button>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════
+     CONTENEDOR DE TOASTS
+══════════════════════════════════════════════════════════ -->
+<div id="toast-container" aria-live="polite" aria-atomic="false"></div>
+
+<!-- ══════════════════════════════════════════════════════════
+     SCRIPTS
+══════════════════════════════════════════════════════════ -->
+<script src="app.js" defer></script>
+<!-- OpenCV.js se carga dinámicamente desde el script en <head>. -->
+<!-- Para uso 100% offline: descargá opencv.js y placélo en esta misma carpeta. -->
+
+</body>
+</html>

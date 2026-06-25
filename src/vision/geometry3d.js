@@ -252,7 +252,15 @@ export function getCameraParams(H_base_inv, H_alzado_inv, width, height) {
   
   const t_vec = { x: t_raw.x * lambda, y: t_raw.y * lambda, z: t_raw.z * lambda };
 
-  return { f, Pcx, Pcy, r1, r2, r3, t_vec };
+  // Calcular la escala de la pared (alzado) en el espacio de cámara para calibrar el eje vertical vn_default
+  const rw1_raw = applyKinv({ x: hw[0], y: hw[3], z: hw[6] });
+  const rw2_raw = applyKinv({ x: hw[1], y: hw[4], z: hw[7] });
+  const normRw1 = Math.hypot(rw1_raw.x, rw1_raw.y, rw1_raw.z);
+  const normRw2 = Math.hypot(rw2_raw.x, rw2_raw.y, rw2_raw.z);
+  const lambda_w = 1.0 / Math.sqrt(normRw1 * normRw2);
+  const vn_default = (normRw2 * lambda_w) || Math.hypot(r3.x, r3.y, r3.z) || 1.0;
+
+  return { f, Pcx, Pcy, r1, r2, r3, t_vec, vn_default };
 }
 
 
@@ -290,6 +298,7 @@ export function project3D(params, X_mm, Y_mm, Z_mm) {
  */
 export function projectVirtualPlane(params, P1_mm, P2_mm, U_mm, Z_mm, vanishingPointH = null, vanishingPointV = null) {
   const { f, Pcx, Pcy, r1, r2, r3, t_vec } = params;
+  const scale_v = params.s_v || params.vn_default || Math.hypot(r3.x, r3.y, r3.z) || 1.0;
 
   // 1. Origen en cámara
   const P1_cam = {
@@ -298,51 +307,66 @@ export function projectVirtualPlane(params, P1_mm, P2_mm, U_mm, Z_mm, vanishingP
     z: r1.z * P1_mm.x + r2.z * P1_mm.y + t_vec.z
   };
 
-  // 2. Dirección horizontal en cámara (u_cam)
-  let u_cam;
+  // 2. Dirección horizontal en cámara
+  const dx = P2_mm.x - P1_mm.x;
+  const dy = P2_mm.y - P1_mm.y;
+  const lenU = Math.hypot(dx, dy) || 1;
+  const u_dir_obj = { x: dx/lenU, y: dy/lenU, z: 0 };
+  const u_dir_cam = {
+    x: r1.x * u_dir_obj.x + r2.x * u_dir_obj.y,
+    y: r1.y * u_dir_obj.x + r2.y * u_dir_obj.y,
+    z: r1.z * u_dir_obj.x + r2.z * u_dir_obj.y
+  };
+  const un = Math.hypot(u_dir_cam.x, u_dir_cam.y, u_dir_cam.z) || 1;
+
+  let u_cam_unit;
   if (vanishingPointH) {
-    u_cam = {
+    const raw = {
       x: (vanishingPointH.x - Pcx) / f,
       y: (vanishingPointH.y - Pcy) / f,
       z: 1
     };
-    const un = Math.hypot(u_cam.x, u_cam.y, u_cam.z) || 1;
-    u_cam = { x: u_cam.x/un, y: u_cam.y/un, z: u_cam.z/un };
+    const norm = Math.hypot(raw.x, raw.y, raw.z) || 1;
+    u_cam_unit = { x: raw.x / norm, y: raw.y / norm, z: raw.z / norm };
   } else {
-    const dx = P2_mm.x - P1_mm.x;
-    const dy = P2_mm.y - P1_mm.y;
-    const lenU = Math.hypot(dx, dy) || 1;
-    const u_dir_obj = { x: dx/lenU, y: dy/lenU, z: 0 };
-    const u_dir_cam = {
-      x: r1.x * u_dir_obj.x + r2.x * u_dir_obj.y,
-      y: r1.y * u_dir_obj.x + r2.y * u_dir_obj.y,
-      z: r1.z * u_dir_obj.x + r2.z * u_dir_obj.y
-    };
-    const un = Math.hypot(u_dir_cam.x, u_dir_cam.y, u_dir_cam.z) || 1;
-    u_cam = { x: u_dir_cam.x/un, y: u_dir_cam.y/un, z: u_dir_cam.z/un };
+    u_cam_unit = { x: u_dir_cam.x / un, y: u_dir_cam.y / un, z: u_dir_cam.z / un };
   }
 
-  // 3. Dirección vertical en cámara (v_dir_cam)
-  let v_dir_cam;
+  // Calibración dinámica del factor de escala horizontal (s_h)
+  // Asegura que la proyección del segmento base [P1, P2] mida exactamente lenU mm en el plano virtual
+  const P2_cam = {
+    x: r1.x * P2_mm.x + r2.x * P2_mm.y + t_vec.x,
+    y: r1.y * P2_mm.x + r2.y * P2_mm.y + t_vec.y,
+    z: r1.z * P2_mm.x + r2.z * P2_mm.y + t_vec.z
+  };
+  const V2 = {
+    x: P2_cam.x - P1_cam.x,
+    y: P2_cam.y - P1_cam.y,
+    z: P2_cam.z - P1_cam.z
+  };
+  const U_scaled = V2.x * u_cam_unit.x + V2.y * u_cam_unit.y + V2.z * u_cam_unit.z;
+  const s_h = U_scaled / lenU;
+
+  // 3. Dirección vertical en cámara
+  let v_cam_unit;
   if (vanishingPointV) {
-    v_dir_cam = {
+    const raw = {
       x: (vanishingPointV.x - Pcx) / f,
       y: (vanishingPointV.y - Pcy) / f,
       z: 1
     };
-    const vn = Math.hypot(v_dir_cam.x, v_dir_cam.y, v_dir_cam.z) || 1;
-    v_dir_cam = { x: v_dir_cam.x/vn, y: v_dir_cam.y/vn, z: v_dir_cam.z/vn };
+    const norm = Math.hypot(raw.x, raw.y, raw.z) || 1;
+    v_cam_unit = { x: raw.x / norm, y: raw.y / norm, z: raw.z / norm };
   } else {
-    v_dir_cam = { x: -r3.x, y: -r3.y, z: -r3.z };
-    const vn = Math.hypot(v_dir_cam.x, v_dir_cam.y, v_dir_cam.z) || 1;
-    v_dir_cam = { x: v_dir_cam.x/vn, y: v_dir_cam.y/vn, z: v_dir_cam.z/vn };
+    const norm3 = Math.hypot(r3.x, r3.y, r3.z) || 1.0;
+    v_cam_unit = { x: -r3.x / norm3, y: -r3.y / norm3, z: -r3.z / norm3 };
   }
 
-  // 4. Punto en coordenadas de cámara
+  // 4. Punto en coordenadas de cámara (escalando con s_h y scale_v para consistencia métrica)
   const P_cam = {
-    x: P1_cam.x + U_mm * u_cam.x + Z_mm * v_dir_cam.x,
-    y: P1_cam.y + U_mm * u_cam.y + Z_mm * v_dir_cam.y,
-    z: P1_cam.z + U_mm * u_cam.z + Z_mm * v_dir_cam.z
+    x: P1_cam.x + (U_mm * s_h) * u_cam_unit.x + (Z_mm * scale_v) * v_cam_unit.x,
+    y: P1_cam.y + (U_mm * s_h) * u_cam_unit.y + (Z_mm * scale_v) * v_cam_unit.y,
+    z: P1_cam.z + (U_mm * s_h) * u_cam_unit.z + (Z_mm * scale_v) * v_cam_unit.z
   };
 
   if (P_cam.z < 1e-5) return null;
@@ -367,6 +391,7 @@ export function projectVirtualPlane(params, P1_mm, P2_mm, U_mm, Z_mm, vanishingP
  */
 export function intersectRayWithVirtualPlane(params, u, v, P1_mm, P2_mm, vanishingPointH = null, vanishingPointV = null) {
   const { f, Pcx, Pcy, r1, r2, r3, t_vec } = params;
+  const scale_v = params.s_v || params.vn_default || Math.hypot(r3.x, r3.y, r3.z) || 1.0;
 
   // ── 1. Origen del plano en coordenadas de cámara ─────────────────────────
   const P1_cam = {
@@ -375,57 +400,70 @@ export function intersectRayWithVirtualPlane(params, u, v, P1_mm, P2_mm, vanishi
     z: r1.z * P1_mm.x + r2.z * P1_mm.y + t_vec.z
   };
 
-  // ── 2. Dirección del eje horizontal en coordenadas de cámara ────────────
-  let u_cam;
+  // ── 2. Direcciones de referencia y sus normas locales ────────────────────
   const dx = P2_mm.x - P1_mm.x;
   const dy = P2_mm.y - P1_mm.y;
   const lenU = Math.hypot(dx, dy) || 1;
   const u_dir_obj = { x: dx/lenU, y: dy/lenU, z: 0 };
+  const u_dir_cam = {
+    x: r1.x * u_dir_obj.x + r2.x * u_dir_obj.y,
+    y: r1.y * u_dir_obj.x + r2.y * u_dir_obj.y,
+    z: r1.z * u_dir_obj.x + r2.z * u_dir_obj.y
+  };
 
+  // ── 3. Ejes unitarios del plano virtual ──────────────────────────────────
+  let u_cam_unit;
   if (vanishingPointH) {
-    u_cam = {
+    const raw = {
       x: (vanishingPointH.x - Pcx) / f,
       y: (vanishingPointH.y - Pcy) / f,
       z: 1
     };
-    const un = Math.hypot(u_cam.x, u_cam.y, u_cam.z) || 1;
-    u_cam = { x: u_cam.x/un, y: u_cam.y/un, z: u_cam.z/un };
+    const norm = Math.hypot(raw.x, raw.y, raw.z) || 1;
+    u_cam_unit = { x: raw.x / norm, y: raw.y / norm, z: raw.z / norm };
   } else {
-    const u_dir_cam = {
-      x: r1.x * u_dir_obj.x + r2.x * u_dir_obj.y,
-      y: r1.y * u_dir_obj.x + r2.y * u_dir_obj.y,
-      z: r1.z * u_dir_obj.x + r2.z * u_dir_obj.y
-    };
     const un = Math.hypot(u_dir_cam.x, u_dir_cam.y, u_dir_cam.z) || 1;
-    u_cam = { x: u_dir_cam.x/un, y: u_dir_cam.y/un, z: u_dir_cam.z/un };
+    u_cam_unit = { x: u_dir_cam.x / un, y: u_dir_cam.y / un, z: u_dir_cam.z / un };
   }
 
-  // ── 3. Dirección del eje vertical en coordenadas de cámara ──────────────
-  let v_dir_cam;
+  // Calibración dinámica del factor de escala horizontal (s_h)
+  const P2_cam = {
+    x: r1.x * P2_mm.x + r2.x * P2_mm.y + t_vec.x,
+    y: r1.y * P2_mm.x + r2.y * P2_mm.y + t_vec.y,
+    z: r1.z * P2_mm.x + r2.z * P2_mm.y + t_vec.z
+  };
+  const V2 = {
+    x: P2_cam.x - P1_cam.x,
+    y: P2_cam.y - P1_cam.y,
+    z: P2_cam.z - P1_cam.z
+  };
+  const U_scaled = V2.x * u_cam_unit.x + V2.y * u_cam_unit.y + V2.z * u_cam_unit.z;
+  const s_h = U_scaled / lenU;
+
+  let v_cam_unit;
   if (vanishingPointV) {
-    v_dir_cam = {
+    const raw = {
       x: (vanishingPointV.x - Pcx) / f,
       y: (vanishingPointV.y - Pcy) / f,
       z: 1
     };
-    const vn = Math.hypot(v_dir_cam.x, v_dir_cam.y, v_dir_cam.z) || 1;
-    v_dir_cam = { x: v_dir_cam.x/vn, y: v_dir_cam.y/vn, z: v_dir_cam.z/vn };
+    const norm = Math.hypot(raw.x, raw.y, raw.z) || 1;
+    v_cam_unit = { x: raw.x / norm, y: raw.y / norm, z: raw.z / norm };
   } else {
-    v_dir_cam = { x: -r3.x, y: -r3.y, z: -r3.z };
-    const vn = Math.hypot(v_dir_cam.x, v_dir_cam.y, v_dir_cam.z) || 1;
-    v_dir_cam = { x: v_dir_cam.x/vn, y: v_dir_cam.y/vn, z: v_dir_cam.z/vn };
+    const norm3 = Math.hypot(r3.x, r3.y, r3.z) || 1.0;
+    v_cam_unit = { x: -r3.x / norm3, y: -r3.y / norm3, z: -r3.z / norm3 };
   }
 
-  // ── 4. Normal del plano virtual = u_cam × v_dir_cam ─────────────────────
+  // ── 4. Normal del plano virtual = u_cam_unit × v_cam_unit ────────────────
   const n_cam = {
-    x: u_cam.y * v_dir_cam.z - u_cam.z * v_dir_cam.y,
-    y: u_cam.z * v_dir_cam.x - u_cam.x * v_dir_cam.z,
-    z: u_cam.x * v_dir_cam.y - u_cam.y * v_dir_cam.x
+    x: u_cam_unit.y * v_cam_unit.z - u_cam_unit.z * v_cam_unit.y,
+    y: u_cam_unit.z * v_cam_unit.x - u_cam_unit.x * v_cam_unit.z,
+    z: u_cam_unit.x * v_cam_unit.y - u_cam_unit.y * v_cam_unit.x
   };
   const nn = Math.hypot(n_cam.x, n_cam.y, n_cam.z) || 1;
   const n = { x: n_cam.x/nn, y: n_cam.y/nn, z: n_cam.z/nn };
 
-  // ── 5. Rayo desde el centro de la cámara por el píxel (u, v) ────────────
+  // ── 5. Rayo por el píxel (u, v) ──────────────────────────────────────────
   const ray = {
     x: (u - Pcx) / f,
     y: (v - Pcy) / f,
@@ -440,30 +478,33 @@ export function intersectRayWithVirtualPlane(params, u, v, P1_mm, P2_mm, vanishi
   const t = num / den;
   if (t < 0) return null;
 
-  // Punto de intersección en coordenadas de cámara
   const P_cam = { x: ray.x * t, y: ray.y * t, z: ray.z * t };
 
-  // ── 7. Resolver coordenadas U_mm y Z_mm en el plano virtual ──────────────
+  // ── 7. Resolver coordenadas U y Z en base a los ejes unitarios ───────────
   const V = {
     x: P_cam.x - P1_cam.x,
     y: P_cam.y - P1_cam.y,
     z: P_cam.z - P1_cam.z
   };
 
-  const V_dot_u = V.x * u_cam.x + V.y * u_cam.y + V.z * u_cam.z;
-  const V_dot_v = V.x * v_dir_cam.x + V.y * v_dir_cam.y + V.z * v_dir_cam.z;
-  const cos_theta = u_cam.x * v_dir_cam.x + u_cam.y * v_dir_cam.y + u_cam.z * v_dir_cam.z;
+  const V_dot_u = V.x * u_cam_unit.x + V.y * u_cam_unit.y + V.z * u_cam_unit.z;
+  const V_dot_v = V.x * v_cam_unit.x + V.y * v_cam_unit.y + V.z * v_cam_unit.z;
+  const cos_theta = u_cam_unit.x * v_cam_unit.x + u_cam_unit.y * v_cam_unit.y + u_cam_unit.z * v_cam_unit.z;
 
   const D = 1 - cos_theta * cos_theta;
-  let U_mm = 0;
-  let Z_mm = 0;
+  let U_unit = 0;
+  let Z_unit = 0;
   if (D > 1e-6) {
-    U_mm = (V_dot_u - V_dot_v * cos_theta) / D;
-    Z_mm = (V_dot_v - V_dot_u * cos_theta) / D;
+    U_unit = (V_dot_u - V_dot_v * cos_theta) / D;
+    Z_unit = (V_dot_v - V_dot_u * cos_theta) / D;
   } else {
-    U_mm = V_dot_u;
-    Z_mm = V_dot_v;
+    U_unit = V_dot_u;
+    Z_unit = V_dot_v;
   }
+
+  // Convertir las distancias tridimensionales a la escala métrica de los planos base y alzado
+  const U_mm = U_unit / s_h;
+  const Z_mm = Z_unit / scale_v;
 
   // Retornar en el sistema objeto del piso: P1_mm + U_mm * u_dir_obj
   const P_obj = {
@@ -473,4 +514,142 @@ export function intersectRayWithVirtualPlane(params, u, v, P1_mm, P2_mm, vanishi
   };
 
   return P_obj;
+}
+
+/**
+ * Calibra el factor de escala vertical (s_v) calculando la intersección del plano pared con el plano virtual.
+ */
+export function calibrateVirtualPlaneScale(params, H_base, H_base_inv, H_alzado, H_alzado_inv, b1_mm, b2_mm, vanishingPointH = null, vanishingPointV = null) {
+  const { f, Pcx, Pcy, r1, r2, r3, t_vec, vn_default } = params;
+
+  // 1. Obtener la normal del plano pared en cámara
+  const hw = H_alzado_inv.data64F;
+  const applyKinv = (h) => ({
+    x: (h.x - Pcx * h.z) / f,
+    y: (h.y - Pcy * h.z) / f,
+    z: h.z
+  });
+
+  const rw1_raw = applyKinv({ x: hw[0], y: hw[3], z: hw[6] });
+  const rw2_raw = applyKinv({ x: hw[1], y: hw[4], z: hw[7] });
+  const t_w_raw = applyKinv({ x: hw[2], y: hw[5], z: hw[8] });
+
+  const normRw1 = Math.hypot(rw1_raw.x, rw1_raw.y, rw1_raw.z) || 1.0;
+  const normRw2 = Math.hypot(rw2_raw.x, rw2_raw.y, rw2_raw.z) || 1.0;
+  const lambda_w = 1.0 / Math.sqrt(normRw1 * normRw2);
+
+  const rw1 = { x: rw1_raw.x * lambda_w, y: rw1_raw.y * lambda_w, z: rw1_raw.z * lambda_w };
+  const rw2 = { x: rw2_raw.x * lambda_w, y: rw2_raw.y * lambda_w, z: rw2_raw.z * lambda_w };
+  const t_w = { x: t_w_raw.x * lambda_w, y: t_w_raw.y * lambda_w, z: t_w_raw.z * lambda_w };
+
+  // normal de la pared
+  const n_w_raw = {
+    x: rw1.y * rw2.z - rw1.z * rw2.y,
+    y: rw1.z * rw2.x - rw1.x * rw2.z,
+    z: rw1.x * rw2.y - rw1.y * rw2.x
+  };
+  const normNw = Math.hypot(n_w_raw.x, n_w_raw.y, n_w_raw.z) || 1.0;
+  const n_w = { x: n_w_raw.x / normNw, y: n_w_raw.y / normNw, z: n_w_raw.z / normNw };
+  const d_w = -(n_w.x * t_w.x + n_w.y * t_w.y + n_w.z * t_w.z);
+
+  // 2. Recta del plano virtual en el piso (2D en mm)
+  // A_virt * X + B_virt * Y + C_virt = 0
+  const A_virt = b2_mm.y - b1_mm.y;
+  const B_virt = -(b2_mm.x - b1_mm.x);
+  const C_virt = b2_mm.x * b1_mm.y - b1_mm.x * b2_mm.y;
+
+  // 3. Recta de la pared en el piso (2D en mm)
+  // Reemplazando la proyección 3D del piso en la ecuación de la pared:
+  // A_wall * X + B_wall * Y + C_wall = 0
+  const A_wall = n_w.x * r1.x + n_w.y * r1.y + n_w.z * r1.z;
+  const B_wall = n_w.x * r2.x + n_w.y * r2.y + n_w.z * r2.z;
+  const C_wall = n_w.x * t_vec.x + n_w.y * t_vec.y + n_w.z * t_vec.z + d_w;
+
+  // 4. Intersección de ambas rectas en el piso (mm)
+  const delta = A_wall * B_virt - B_wall * A_virt;
+  if (Math.abs(delta) < 1e-6) {
+    return { s_v: vn_default, P_base_intersect: null, P_top_intersect: null };
+  }
+
+  const X_int = (B_wall * C_virt - C_wall * B_virt) / delta;
+  const Y_int = (C_wall * A_virt - A_wall * C_virt) / delta;
+
+  // 5. Proyectar este punto base de intersección a 3D cámara
+  const P_base_cam = {
+    x: r1.x * X_int + r2.x * Y_int + t_vec.x,
+    y: r1.y * X_int + r2.y * Y_int + t_vec.y,
+    z: r1.z * X_int + r2.z * Y_int + t_vec.z
+  };
+
+  // 6. Proyectar a píxeles de imagen
+  if (P_base_cam.z < 1e-5) {
+    return { s_v: vn_default, P_base_intersect: null, P_top_intersect: null };
+  }
+  const u_base = (f * P_base_cam.x / P_base_cam.z) + Pcx;
+  const v_base = (f * P_base_cam.y / P_base_cam.z) + Pcy;
+
+  // 7. Mapear este pixel a coordenadas del plano pared (mm) usando H_alzado (pixel -> mm)
+  const h_alzado_data = H_alzado.data64F;
+  const w_base_wall = h_alzado_data[6] * u_base + h_alzado_data[7] * v_base + h_alzado_data[8];
+  if (Math.abs(w_base_wall) < 1e-7) {
+    return { s_v: vn_default, P_base_intersect: null, P_top_intersect: null };
+  }
+  const P_base_wall_mm = {
+    x: (h_alzado_data[0] * u_base + h_alzado_data[1] * v_base + h_alzado_data[2]) / w_base_wall,
+    y: (h_alzado_data[3] * u_base + h_alzado_data[4] * v_base + h_alzado_data[5]) / w_base_wall
+  };
+
+  // 8. Crear un punto a altura de referencia (ej: 500 mm) en la pared
+  const H_ref = 500.0;
+  const X_wall_top = P_base_wall_mm.x;
+  const Y_wall_top = P_base_wall_mm.y - H_ref; // Y sube hacia arriba (restando en coordenadas de plantilla)
+
+  // Mapear este punto top a píxeles usando H_alzado_inv (mm -> pixel)
+  const w_top_wall = hw[6] * X_wall_top + hw[7] * Y_wall_top + hw[8];
+  if (Math.abs(w_top_wall) < 1e-7) {
+    return { s_v: vn_default, P_base_intersect: null, P_top_intersect: null };
+  }
+  const u_top = (hw[0] * X_wall_top + hw[1] * Y_wall_top + hw[2]) / w_top_wall;
+  const v_top = (hw[3] * X_wall_top + hw[4] * Y_wall_top + hw[5]) / w_top_wall;
+
+  // Proyectar este pixel top a 3D cámara
+  const P_top_cam = {
+    x: lambda_w * w_top_wall * (u_top - Pcx) / f,
+    y: lambda_w * w_top_wall * (v_top - Pcy) / f,
+    z: lambda_w * w_top_wall
+  };
+
+  // 9. Calcular la dirección vertical unitaria en cámara
+  let v_cam_unit;
+  if (vanishingPointV) {
+    const raw = {
+      x: (vanishingPointV.x - Pcx) / f,
+      y: (vanishingPointV.y - Pcy) / f,
+      z: 1
+    };
+    const norm = Math.hypot(raw.x, raw.y, raw.z) || 1;
+    v_cam_unit = { x: raw.x / norm, y: raw.y / norm, z: raw.z / norm };
+  } else {
+    const norm3 = Math.hypot(r3.x, r3.y, r3.z) || 1.0;
+    v_cam_unit = { x: -r3.x / norm3, y: -r3.y / norm3, z: -r3.z / norm3 };
+  }
+
+  // 10. Despejar s_v
+  const v_diff = {
+    x: P_top_cam.x - P_base_cam.x,
+    y: P_top_cam.y - P_base_cam.y,
+    z: P_top_cam.z - P_base_cam.z
+  };
+  const dot = v_diff.x * v_cam_unit.x + v_diff.y * v_cam_unit.y + v_diff.z * v_cam_unit.z;
+  let s_v = Math.abs(dot) / H_ref;
+
+  if (isNaN(s_v) || s_v < 1e-4) {
+    s_v = vn_default;
+  }
+
+  return {
+    s_v,
+    P_base_intersect: { x: u_base, y: v_base },
+    P_top_intersect: { x: u_top, y: v_top }
+  };
 }

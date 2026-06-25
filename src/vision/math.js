@@ -62,9 +62,15 @@ export function computeHomographyAndScale(sheetObj) {
  * @param {number} y
  * @returns {{x:number, y:number, w:number}|null}
  */
-export function applyH(h, x, y) {
+export function applyH(h, x, y, w_sign = 0) {
   const w = h[6] * x + h[7] * y + h[8];
-  if (Math.abs(w) < 1e-10) return null;
+  
+  if (w_sign !== 0) {
+    if (w * w_sign < 1e-3) return null;
+  } else {
+    if (Math.abs(w) < 1e-7) return null;
+  }
+  
   return {
     x: (h[0] * x + h[1] * y + h[2]) / w,
     y: (h[3] * x + h[4] * y + h[5]) / w,
@@ -77,10 +83,10 @@ export function applyH(h, x, y) {
  * qué tamaño en mm tiene un micro-paso de +1px en X y en Y.
  * @returns {{L_dx:number, L_dy:number, L_max:number, w:number, mm:{x,y}}|null}
  */
-export function localStretch(h, px, py) {
-  const p0   = applyH(h, px,     py);
-  const p_dx = applyH(h, px + 1, py);
-  const p_dy = applyH(h, px,     py + 1);
+export function localStretch(h, px, py, w_sign = 0) {
+  const p0   = applyH(h, px,     py, w_sign);
+  const p_dx = applyH(h, px + 1, py, w_sign);
+  const p_dy = applyH(h, px,     py + 1, w_sign);
   if (!p0 || !p_dx || !p_dy) return null;
 
   const L_dx = Math.hypot(p_dx.x - p0.x, p_dx.y - p0.y);
@@ -98,7 +104,7 @@ export function localStretch(h, px, py) {
  * @param {{x,y}}       sheetCenter  - Centro de la hoja en px
  * @returns {Array<{gx,gy,mm:{x,y}}>} validPoints
  */
-export function conformalFilter(H, imgW, imgH, sheetCenter) {
+export function conformalFilter(H, imgW, imgH, sheetCenter, targets) {
   const h = H.data64F;
 
   /* L_ref: estiramiento en el centro de la hoja */
@@ -108,11 +114,13 @@ export function conformalFilter(H, imgW, imgH, sheetCenter) {
   const L_ref       = refS.L_max;
   const W_ref_sign  = Math.sign(refS.w);
   const threshold   = L_ref * STRETCH_LIMIT;
-  const validPoints = [];
+  
+  // Agregar siempre los puntos teóricos del papel como base
+  const validPoints = targets.map(t => ({ mm: { x: t[0], y: t[1] } }));
 
   for (let gy = 0; gy <= imgH; gy += GRID_STEP_PX) {
     for (let gx = 0; gx <= imgW; gx += GRID_STEP_PX) {
-      const s = localStretch(h, gx, gy);
+      const s = localStretch(h, gx, gy, W_ref_sign);
       if (!s) continue;
 
       /* FILTRO 1: Singularidad del horizonte (cambio de signo de W) */
@@ -120,6 +128,9 @@ export function conformalFilter(H, imgW, imgH, sheetCenter) {
 
       /* FILTRO 2: Estiramiento excesivo */
       if (s.L_max > threshold) continue;
+      
+      /* FILTRO 3: Limitar puntos absurdos (máx 2000 mm = 2 metros) */
+      if (Math.abs(s.mm.x) > 2000 || Math.abs(s.mm.y) > 2000) continue;
 
       validPoints.push({ gx, gy, mm: s.mm });
     }

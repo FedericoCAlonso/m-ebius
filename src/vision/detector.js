@@ -9,13 +9,13 @@ export const SHEET_TEMPLATES = [
   {
     name: "A5",
     ids: [0, 1, 2, 3],
-    w_mm: 100.0,
+    w_mm: 110.0,
     h_mm: 170.0,
     targets: [
       [10, 10],   // SupIzq
-      [110, 10],  // SupDer
+      [120, 10],  // SupDer
       [10, 180],  // InfIzq
-      [110, 180], // InfDer
+      [120, 180], // InfDer
     ]
   },
   {

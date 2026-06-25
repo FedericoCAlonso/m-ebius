@@ -5,7 +5,7 @@
    ============================================================ */
 'use strict';
 
-const CACHE_VERSION    = 'v10';
+const CACHE_VERSION    = 'v14';
 const APP_CACHE_NAME   = `mobius-app-${CACHE_VERSION}`;
 const CV_CACHE_NAME    = `mobius-opencv-${CACHE_VERSION}`;
 
@@ -13,7 +13,11 @@ const APP_ASSETS = [
   './',
   './index.html',
   './style.css',
-  './app.js',
+  './src/main.js',
+  './src/vision/geometry3d.js',
+  './src/vision/math.js',
+  './src/vision/detector.js',
+  './src/storage/db.js',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',

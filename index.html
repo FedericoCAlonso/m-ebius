@@ -212,6 +212,37 @@
             </svg>
             Exportar Vista Plana
           </button>
+          
+          <hr style="border: 0; border-top: 1px solid var(--border); margin: 10px 0;">
+          
+          <!-- Controles de Herramientas -->
+          <div class="tool-controls" style="display: flex; flex-direction: column; gap: 8px;">
+            <label style="font-size: 12px; font-weight: 500; color: var(--text-secondary);">Herramienta:</label>
+            <div style="display: flex; gap: 5px;">
+              <button class="btn btn-primary btn-sm active" id="btn-tool-2d" style="flex: 1; padding: 4px;">📏 2D</button>
+              <button class="btn btn-secondary btn-sm" id="btn-tool-virtual" style="flex: 1; padding: 4px;">🧊 Virtual</button>
+            </div>
+          </div>
+
+          <!-- Selectores de Plano 3D (Ocultos por defecto) -->
+          <div id="plane-selectors-3d" style="display: none; flex-direction: column; gap: 8px; margin-top: 10px; padding: 8px; background: rgba(0,0,0,0.1); border-radius: 6px;">
+            <label style="font-size: 11px; font-weight: bold; color: var(--text-secondary);">Plano Base (Piso):</label>
+            <select id="select-plane-base" class="plane-select"></select>
+            
+            <label style="font-size: 11px; font-weight: bold; color: var(--text-secondary); margin-top: 4px;">Plano Alzado (Pared):</label>
+            <select id="select-plane-wall" class="plane-select"></select>
+            
+            <button class="btn btn-secondary btn-sm" id="btn-reset-virtual" type="button" style="display: none; margin-top: 5px; width: 100%;">
+              🔄 Reiniciar Plano Virtual
+            </button>
+            <button class="btn btn-secondary btn-sm" id="btn-tilt-virtual" type="button" style="display: none; margin-top: 5px; width: 100%; font-size: 11px;">
+              📐 Fuga Horizontal
+            </button>
+            <button class="btn btn-secondary btn-sm" id="btn-calib-vert-virtual" type="button" style="display: none; margin-top: 5px; width: 100%; font-size: 11px;">
+              📏 Fuga Vertical
+            </button>
+          </div>
+          
           <button class="btn btn-ghost btn-sm" id="btn-reset" type="button" style="width: 100%;">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
               <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/>
@@ -226,6 +257,7 @@
         <div class="viewer-container" id="viewer-container">
           <canvas id="main-image-canvas" class="main-canvas" aria-label="Foto Original"></canvas>
           <canvas id="overlay-canvas" class="overlay-canvas" aria-label="Capa de Cuadrícula y Medición"></canvas>
+          <canvas id="interactive-canvas" class="interactive-canvas" aria-label="Capa de Interacción 3D" style="position: absolute; top: 0; left: 0; pointer-events: none; z-index: 10;"></canvas>
         </div>
         <!-- Controles de Visor flotantes -->
         <div class="viewer-controls">
@@ -349,6 +381,8 @@
 <!-- ══════════════════════════════════════════════════════════
      SCRIPTS
      ══════════════════════════════════════════════════════════ -->
+<!-- OpenCV.js se carga dinámicamente desde el script en <head>. -->
+
 <script type="module" src="src/main.js"></script>
 <!-- OpenCV.js se carga dinámicamente desde el script en <head>. -->
 <!-- Para uso 100% offline: descargá opencv.js y placélo en esta misma carpeta. -->

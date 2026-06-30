@@ -205,7 +205,21 @@
         <div id="planes-list" class="planes-list" role="tablist">
           <!-- Botones de planos se inyectan acá -->
         </div>
+        <div style="display: flex; gap: 4px; padding: 10px; border-bottom: 1px solid var(--border); background: var(--surface-2); flex-shrink: 0;">
+          <button class="btn btn-secondary btn-sm" id="btn-add-virtual" type="button" style="flex: 1; font-size: 11px; padding: 4px;" title="Añadir Plano Virtual Vertical">➕ Alzado (Virtual)</button>
+          <button class="btn btn-secondary btn-sm" id="btn-add-elevated" type="button" style="flex: 1; font-size: 11px; padding: 4px;" title="Añadir Plano Elevado Paralelo al Piso">➕ Paralelo (Elevado)</button>
+        </div>
+
         <div class="sidebar-actions">
+          <div style="display: flex; gap: 10px; margin-bottom: 10px; justify-content: space-between;">
+            <label style="display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-secondary); cursor: pointer;">
+              <input type="checkbox" id="toggle-grid" checked> Mostrar Grilla
+            </label>
+            <label style="display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-secondary); cursor: pointer;" title="Proyecta el plano seleccionado de frente">
+              <input type="checkbox" id="toggle-flat"> Vista Plana
+            </label>
+          </div>
+
           <button class="btn btn-secondary btn-sm" id="btn-export-png" type="button" style="width: 100%;">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
               <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/>
@@ -214,33 +228,32 @@
           </button>
           
           <hr style="border: 0; border-top: 1px solid var(--border); margin: 10px 0;">
-          
-          <!-- Controles de Herramientas -->
-          <div class="tool-controls" style="display: flex; flex-direction: column; gap: 8px;">
-            <label style="font-size: 12px; font-weight: 500; color: var(--text-secondary);">Herramienta:</label>
-            <div style="display: flex; gap: 5px;">
-              <button class="btn btn-primary btn-sm active" id="btn-tool-2d" style="flex: 1; padding: 4px;">📏 2D</button>
-              <button class="btn btn-secondary btn-sm" id="btn-tool-virtual" style="flex: 1; padding: 4px;">🧊 Virtual</button>
-            </div>
-          </div>
 
-          <!-- Selectores de Plano 3D (Ocultos por defecto) -->
-          <div id="plane-selectors-3d" style="display: none; flex-direction: column; gap: 8px; margin-top: 10px; padding: 8px; background: rgba(0,0,0,0.1); border-radius: 6px;">
-            <label style="font-size: 11px; font-weight: bold; color: var(--text-secondary);">Plano Base (Piso):</label>
-            <select id="select-plane-base" class="plane-select"></select>
+          <!-- Selectores de Plano 3D (Ocultos por defecto, visibles para virtuales/elevados) -->
+          <div id="plane-selectors-3d" style="display: none; flex-direction: column; gap: 8px; padding: 8px; background: rgba(0,0,0,0.1); border-radius: 6px;">
+            <label style="font-size: 11px; font-weight: bold; color: var(--text-secondary);">Configuración de Plano:</label>
+            <div style="display: flex; gap: 4px; margin-bottom: 5px;">
+              <button class="btn btn-secondary btn-sm" id="btn-rename-plane" type="button" style="flex: 1; font-size: 11px; padding: 4px;" title="Renombrar Plano">📝 Renombrar</button>
+              <button class="btn btn-secondary btn-sm" id="btn-delete-plane" type="button" style="flex: 1; font-size: 11px; padding: 4px; color: var(--red);" title="Eliminar Plano">🗑️ Eliminar</button>
+            </div>
             
-            <label style="font-size: 11px; font-weight: bold; color: var(--text-secondary); margin-top: 4px;">Plano Alzado (Pared):</label>
-            <select id="select-plane-wall" class="plane-select"></select>
-            
-            <button class="btn btn-secondary btn-sm" id="btn-reset-virtual" type="button" style="display: none; margin-top: 5px; width: 100%;">
-              🔄 Reiniciar Plano Virtual
-            </button>
-            <button class="btn btn-secondary btn-sm" id="btn-tilt-virtual" type="button" style="display: none; margin-top: 5px; width: 100%; font-size: 11px;">
-              📐 Fuga Horizontal
-            </button>
-            <button class="btn btn-secondary btn-sm" id="btn-calib-vert-virtual" type="button" style="display: none; margin-top: 5px; width: 100%; font-size: 11px;">
-              📏 Fuga Vertical
-            </button>
+            <div id="virtual-only-controls" style="display: flex; flex-direction: column; gap: 8px;">
+              <label style="font-size: 11px; font-weight: bold; color: var(--text-secondary);">Plano Base (Piso):</label>
+              <select id="select-plane-base" class="plane-select"></select>
+              
+              <label style="font-size: 11px; font-weight: bold; color: var(--text-secondary); margin-top: 4px;">Plano Alzado (Pared):</label>
+              <select id="select-plane-wall" class="plane-select"></select>
+              
+              <button class="btn btn-secondary btn-sm" id="btn-reset-virtual" type="button" style="display: none; margin-top: 5px; width: 100%;">
+                🔄 Reiniciar Plano
+              </button>
+              <button class="btn btn-secondary btn-sm" id="btn-tilt-virtual" type="button" style="display: none; margin-top: 5px; width: 100%; font-size: 11px;">
+                📐 Fuga Horizontal
+              </button>
+              <button class="btn btn-secondary btn-sm" id="btn-calib-vert-virtual" type="button" style="display: none; margin-top: 5px; width: 100%; font-size: 11px;">
+                📏 Fuga Vertical
+              </button>
+            </div>
           </div>
           
           <button class="btn btn-ghost btn-sm" id="btn-reset" type="button" style="width: 100%;">

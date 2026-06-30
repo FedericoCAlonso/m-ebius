@@ -138,6 +138,7 @@ main {
   max-width: 1400px;
   width: 100%;
   margin: 0 auto;
+  min-height: 0;
 }
 
 /* ── DROP ZONE ───────────────────────────────────────────── */
@@ -308,9 +309,10 @@ main {
 /* ── ESPACIO DE TRABAJO (Modo Proyección) ────────────────── */
 #workspace-view {
   display: none;
+  flex: 1;
   flex-direction: column;
-  gap: 1.5rem;
-  flex: 1; /* Para que ocupe todo el main */
+  overflow: hidden;
+  min-height: 0;
 }
 #workspace-view.visible { display: flex; }
 
@@ -331,7 +333,7 @@ main {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  overflow: hidden;
+  overflow-y: auto;
 }
 
 .sidebar-header {
@@ -341,6 +343,7 @@ main {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-shrink: 0;
 }
 
 .sidebar-header h3 {
@@ -410,6 +413,7 @@ main {
   display: flex;
   flex-direction: column;
   gap: .5rem;
+  flex-shrink: 0;
 }
 
 /* Visor y Canvas */
@@ -421,6 +425,8 @@ main {
   position: relative;
   overflow: hidden;
   display: block;
+  min-height: 400px;
+  height: 100%;
 }
 
 .viewer-container {
@@ -698,5 +704,27 @@ section-label {
   font-size: .78rem !important;
   color: var(--text-3) !important;
   font-style: italic;
+}
+
+@media (max-width: 850px) {
+  .workspace-layout { 
+    flex-direction: column-reverse; 
+    height: auto; 
+    min-height: auto;
+  }
+  .planes-sidebar { 
+    width: 100%; 
+    height: auto;
+    max-height: none;
+    flex-shrink: 0;
+  }
+  .planes-list {
+    overflow-y: visible;
+  }
+  .viewer-wrapper {
+    height: 60vh;
+    min-height: 400px;
+    flex-shrink: 0;
+  }
 }
 

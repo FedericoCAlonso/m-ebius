@@ -165,7 +165,10 @@ export function calcularAlturaLibre(b, t, vZ, l, H_base_inv, width, height) {
 
   const normR1 = Math.hypot(r1_raw.x, r1_raw.y, r1_raw.z);
   const normR2 = Math.hypot(r2_raw.x, r2_raw.y, r2_raw.z);
-  const lambda = 1.0 / Math.sqrt(normR1 * normR2);
+  let lambda = 1.0 / Math.sqrt(normR1 * normR2);
+  if (t_raw.z < 0) {
+    lambda = -lambda;
+  }
 
   const r1 = { x: r1_raw.x * lambda, y: r1_raw.y * lambda, z: r1_raw.z * lambda };
   const r2 = { x: r2_raw.x * lambda, y: r2_raw.y * lambda, z: r2_raw.z * lambda };
@@ -235,7 +238,10 @@ export function getCameraParams(H_base_inv, H_alzado_inv, width, height) {
 
   const normR1 = Math.hypot(r1_raw.x, r1_raw.y, r1_raw.z);
   const normR2 = Math.hypot(r2_raw.x, r2_raw.y, r2_raw.z);
-  const lambda = 1.0 / Math.sqrt(normR1 * normR2);
+  let lambda = 1.0 / Math.sqrt(normR1 * normR2);
+  if (t_raw.z < 0) {
+    lambda = -lambda;
+  }
 
   const r1 = { x: r1_raw.x * lambda, y: r1_raw.y * lambda, z: r1_raw.z * lambda };
   const r2 = { x: r2_raw.x * lambda, y: r2_raw.y * lambda, z: r2_raw.z * lambda };

@@ -73,7 +73,11 @@ const state = {
   isSelectingExportArea: false,
   exportAreaPoints: null,
   virtualPlaneBaseIntersect: null,
-  virtualPlaneTopIntersect: null
+  virtualPlaneTopIntersect: null,
+  showFlatView: false,
+  flatViewTransform: null,
+  flatViewPlaneId: -1,
+  showGrid: true
 };
 
 /* ─────────────────────────────────────────────────────────────
@@ -405,22 +409,25 @@ function initViewer(width, height) {
   }
 
   function handleVirtualPlaneClick(imgX, imgY) {
-    if (state.virtualPlanePoints.length < 2) {
-      state.virtualPlanePoints.push({ x: imgX, y: imgY });
-      if (state.virtualPlanePoints.length === 2) {
+    const plane = state.planes[state.activePlaneIndex];
+    if (!plane || !plane.isVirtual) return;
+
+    if (plane.points.length < 2) {
+      plane.points.push({ x: imgX, y: imgY });
+      if (plane.points.length === 2) {
+        recomputeVirtualPlane(plane);
+        updatePlaneListUI();
+        setActivePlane(state.activePlaneIndex);
         toast('Plano virtual definido. Ahora podés medir sobre él o ajustar perspectiva/vertical.', 'success');
-        const btnTilt = document.getElementById('btn-tilt-virtual');
-        if (btnTilt) btnTilt.style.display = 'inline-block';
-        const btnCalibV = document.getElementById('btn-calib-vert-virtual');
-        if (btnCalibV) btnCalibV.style.display = 'inline-block';
         drawGrid();
       } else {
         toast('Hacé clic en otro punto del piso para definir la línea base.', 'info');
       }
+      drawMeasurements();
     } else if (state.isCalibVertVirtualPlane) {
-      if (!state.vanishingPointVPoints) state.vanishingPointVPoints = [];
-      state.vanishingPointVPoints.push({ x: imgX, y: imgY });
-      const ptsCount = state.vanishingPointVPoints.length;
+      if (!plane.vanishingPointVPoints) plane.vanishingPointVPoints = [];
+      plane.vanishingPointVPoints.push({ x: imgX, y: imgY });
+      const ptsCount = plane.vanishingPointVPoints.length;
       if (ptsCount === 1) {
         toast('Primer punto de la primera recta vertical marcado. Marcá el segundo punto de la misma recta.', 'info');
       } else if (ptsCount === 2) {
@@ -428,25 +435,22 @@ function initViewer(width, height) {
       } else if (ptsCount === 3) {
         toast('Primer punto de la segunda recta vertical marcado. Marcá el segundo punto de la misma recta.', 'info');
       } else if (ptsCount === 4) {
-        const vp1 = state.vanishingPointVPoints[0];
-        const vp2 = state.vanishingPointVPoints[1];
-        const vp3 = state.vanishingPointVPoints[2];
-        const vp4 = state.vanishingPointVPoints[3];
+        const vp1 = plane.vanishingPointVPoints[0];
+        const vp2 = plane.vanishingPointVPoints[1];
+        const vp3 = plane.vanishingPointVPoints[2];
+        const vp4 = plane.vanishingPointVPoints[3];
 
-        // L1 = vp1 x vp2
         const L1 = {
           x: vp1.y - vp2.y,
           y: vp2.x - vp1.x,
           z: vp1.x * vp2.y - vp1.y * vp2.x
         };
-        // L2 = vp3 x vp4
         const L2 = {
           x: vp3.y - vp4.y,
           y: vp4.x - vp3.x,
           z: vp3.x * vp4.y - vp3.y * vp4.x
         };
 
-        // Intersección V_v = L1 x L2
         const V_v = {
           x: L1.y * L2.z - L1.z * L2.y,
           y: L1.z * L2.x - L1.x * L2.z,
@@ -454,11 +458,9 @@ function initViewer(width, height) {
         };
 
         if (Math.abs(V_v.z) > 1e-7) {
-          state.vanishingPointV = { x: V_v.x / V_v.z, y: V_v.y / V_v.z };
-          toast('Fuga vertical calibrada con éxito mediante 2 rectas.', 'success');
+          plane.vanishingPointV = { x: V_v.x / V_v.z, y: V_v.y / V_v.z };
+          toast('Fuga vertical calibrada con éxito.', 'success');
         } else {
-          // Rectas perfectamente paralelas en imagen (fuga vertical en el infinito)
-          // Usamos la dirección promedio de las dos rectas
           const dx1 = vp2.x - vp1.x;
           const dy1 = vp2.y - vp1.y;
           const dx2 = vp4.x - vp3.x;
@@ -467,43 +469,40 @@ function initViewer(width, height) {
           const dy = (dy1 + dy2) / 2;
           const len = Math.hypot(dx, dy) || 1;
           const farScale = 100000;
-          state.vanishingPointV = {
+          plane.vanishingPointV = {
             x: vp1.x + (dx / len) * farScale,
             y: vp1.y + (dy / len) * farScale
           };
-          toast('Rectas verticales paralelas detectadas. Fuga vertical establecida en el infinito.', 'info');
+          toast('Rectas verticales paralelas detectadas. Fuga vertical en el infinito.', 'info');
         }
         state.isCalibVertVirtualPlane = false;
+        recomputeVirtualPlane(plane);
         drawGrid();
         drawMeasurements();
       }
     } else if (state.isTiltingVirtualPlane) {
-      state.virtualPlaneTiltPoints.push({ x: imgX, y: imgY });
-      const pts = state.virtualPlaneTiltPoints.length;
+      if (!plane.virtualPlaneTiltPoints) plane.virtualPlaneTiltPoints = [];
+      plane.virtualPlaneTiltPoints.push({ x: imgX, y: imgY });
+      const pts = plane.virtualPlaneTiltPoints.length;
       if (pts === 1) {
         toast('Primer punto marcado. Marcá el segundo punto de la recta paralela.', 'info');
       } else if (pts === 2) {
-        // Tenemos la recta base (virtualPlanePoints[0,1]) y la nueva recta (tiltPoints[0,1])
-        // Calcular punto de fuga horizontal = intersección en imagen de ambas rectas
-        const bp1 = state.virtualPlanePoints[0];
-        const bp2 = state.virtualPlanePoints[1];
-        const tp1 = state.virtualPlaneTiltPoints[0];
-        const tp2 = state.virtualPlaneTiltPoints[1];
+        const bp1 = plane.points[0];
+        const bp2 = plane.points[1];
+        const tp1 = plane.virtualPlaneTiltPoints[0];
+        const tp2 = plane.virtualPlaneTiltPoints[1];
         
-        // Línea L_base en coordenadas homogéneas: bp1 x bp2
         const L_base = {
           x: bp1.y - bp2.y,
           y: bp2.x - bp1.x,
           z: bp1.x * bp2.y - bp1.y * bp2.x
         };
-        // Línea L_tilt: tp1 x tp2
         const L_tilt = {
           x: tp1.y - tp2.y,
           y: tp2.x - tp1.x,
           z: tp1.x * tp2.y - tp1.y * tp2.x
         };
         
-        // Punto de fuga V_h = L_base x L_tilt
         const V_h = {
           x: L_base.y * L_tilt.z - L_base.z * L_tilt.y,
           y: L_base.z * L_tilt.x - L_base.x * L_tilt.z,
@@ -511,98 +510,19 @@ function initViewer(width, height) {
         };
         
         if (Math.abs(V_h.z) > 1e-7) {
-          // Guardar el punto de fuga horizontal en coordenadas de imagen
-          state.vanishingPointH = { x: V_h.x / V_h.z, y: V_h.y / V_h.z };
-          toast('Perspectiva horizontal calibrada. La grilla ahora fuga correctamente.', 'success');
+          plane.vanishingPointH = { x: V_h.x / V_h.z, y: V_h.y / V_h.z };
+          toast('Perspectiva horizontal calibrada.', 'success');
         } else {
-          // Rectas perfectamente paralelas en la imagen => punto de fuga en el infinito
-          // Guardar la dirección de la línea (paralelas sin convergencia visible)
-          state.vanishingPointH = null; // null = paralelas perfectas
-          toast('Rectas paralelas en imagen — grilla con filas paralelas.', 'info');
+          plane.vanishingPointH = null;
+          toast('Rectas paralelas en imagen — sin convergencia.', 'info');
         }
         
         state.isTiltingVirtualPlane = false;
+        recomputeVirtualPlane(plane);
         drawGrid();
-      }
-      
-      // Limpiar interactive canvas
-      const canvas = document.getElementById('interactive-canvas');
-      if (canvas) canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
-      
-    } else {
-      // Estamos midiendo
-      if (!state.virtualPlanePendingPoint) {
-        state.virtualPlanePendingPoint = { x: imgX, y: imgY };
-        renderMeasurements();
-      } else {
-        const p1 = state.virtualPlanePendingPoint;
-        const p2 = { x: imgX, y: imgY };
-        
-        const pb = state.planes.find(p => p.id === state.planeBaseIndex);
-        const pw = state.planes.find(p => p.id === state.planeWallIndex);
-        
-        if (pb && pw) {
-          const canvas = document.getElementById('main-image-canvas');
-          const params = getCameraParams(pb.H_inv, pw.H_inv, canvas.width, canvas.height);
-          
-          const projToFloor = (pt) => {
-            const H_data = pb.H.data64F;
-            const w = H_data[6] * pt.x + H_data[7] * pt.y + H_data[8];
-            return {
-              x: (H_data[0] * pt.x + H_data[1] * pt.y + H_data[2]) / w,
-              y: (H_data[3] * pt.x + H_data[4] * pt.y + H_data[5]) / w
-            };
-          };
-          
-          const b1_mm = projToFloor(state.virtualPlanePoints[0]);
-          const b2_mm = projToFloor(state.virtualPlanePoints[1]);
-          
-          // Calibrar la escala vertical en base a la intersección del plano pared con el virtual
-          const calib = calibrateVirtualPlaneScale(
-            params,
-            pb.H, pb.H_inv,
-            pw.H, pw.H_inv,
-            b1_mm, b2_mm,
-            state.vanishingPointH,
-            state.vanishingPointV
-          );
-          params.s_v = calib.s_v;
-          
-          const p1_3d = intersectRayWithVirtualPlane(params, p1.x, p1.y, b1_mm, b2_mm, state.vanishingPointH, state.vanishingPointV);
-          const p2_3d = intersectRayWithVirtualPlane(params, p2.x, p2.y, b1_mm, b2_mm, state.vanishingPointH, state.vanishingPointV);
-          
-          if (p1_3d && p2_3d) {
-            const distMm = Math.hypot(p2_3d.x - p1_3d.x, p2_3d.y - p1_3d.y, p2_3d.z - p1_3d.z);
-            addMeasurementVirtualPlane(distMm, p1, p2);
-            toast(`Medida virtual: ${distMm.toFixed(1)} mm`, 'success');
-          } else {
-            toast('Error: Los puntos no intersectan el plano virtual de forma válida.', 'error');
-          }
-        }
-        
-        state.virtualPlanePendingPoint = null;
-        renderMeasurements();
-        
-        const canvas = document.getElementById('interactive-canvas');
-        if (canvas) canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+        drawMeasurements();
       }
     }
-  }
-  
-  function addMeasurementVirtualPlane(distMm, p1, p2) {
-    const entry = {
-      id:         ++state.measIdCounter,
-      planeId:    -1, // virtual
-      planeLabel: 'Plano Virtual',
-      isVirtual:  true,
-      refName:    '',
-      distMm,
-      points:     [p1, p2], // puntos en coordenadas de imagen
-      timestamp:  new Date().toISOString(),
-    };
-    state.measurements.push(entry);
-    renderMeasurementTable();
-    drawMeasurements();
   }
   
   function renderVirtualPlaneInteractiveLine(mouseX, mouseY) {
@@ -610,13 +530,16 @@ function initViewer(width, height) {
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const plane = state.planes[state.activePlaneIndex];
+    if (!plane || !plane.isVirtual) return;
     
     if (state.isTiltingVirtualPlane) {
-      const pts = state.virtualPlaneTiltPoints;
+      const pts = plane.virtualPlaneTiltPoints || [];
       // Dibujar la recta base como rayo de referencia (yellow)
-      if (state.virtualPlanePoints.length === 2) {
-        const bp1 = state.virtualPlanePoints[0];
-        const bp2 = state.virtualPlanePoints[1];
+      if (plane.points.length === 2) {
+        const bp1 = plane.points[0];
+        const bp2 = plane.points[1];
         const bdx = bp2.x - bp1.x; const bdy = bp2.y - bp1.y;
         const blen = Math.hypot(bdx, bdy) || 1;
         const bnx = bdx / blen; const bny = bdy / blen;
@@ -642,23 +565,13 @@ function initViewer(width, height) {
         ctx.setLineDash([5 / state.viewer.scale, 5 / state.viewer.scale]);
         ctx.stroke();
         ctx.setLineDash([]);
-      } else if (pts.length === 0) {
-        // Sin puntos todavía — mostrar cursor
       }
-    } else if (state.virtualPlanePoints.length === 1) {
-      const b = state.virtualPlanePoints[0];
+    } else if (plane.points.length === 1) {
+      const b = plane.points[0];
       ctx.beginPath();
       ctx.moveTo(b.x, b.y);
       ctx.lineTo(mouseX, mouseY);
       ctx.strokeStyle = '#facc15'; // yellow for base line
-      ctx.lineWidth = 2 / state.viewer.scale;
-      ctx.stroke();
-    } else if (state.virtualPlanePoints.length === 2 && state.virtualPlanePendingPoint) {
-      const p1 = state.virtualPlanePendingPoint;
-      ctx.beginPath();
-      ctx.moveTo(p1.x, p1.y);
-      ctx.lineTo(mouseX, mouseY);
-      ctx.strokeStyle = '#3b82f6'; // blue for measurement
       ctx.lineWidth = 2 / state.viewer.scale;
       ctx.stroke();
     }
@@ -689,7 +602,9 @@ function initViewer(width, height) {
       const clickX = e.clientX - rect.left;
       const clickY = e.clientY - rect.top;
       
-      if (state.activeTool === 'virtual_plane') {
+      const plane = state.planes[state.activePlaneIndex];
+      const isCalibratingVirtual = plane && plane.isVirtual && (plane.points.length < 2 || state.isCalibVertVirtualPlane || state.isTiltingVirtualPlane);
+      if (isCalibratingVirtual) {
         renderVirtualPlaneInteractiveLine((clickX - state.viewer.offsetX) / state.viewer.scale, (clickY - state.viewer.offsetY) / state.viewer.scale);
       }
     }
@@ -710,9 +625,16 @@ function initViewer(width, height) {
       return;
     }
 
-    if (state.activeTool === 'virtual_plane') {
+    const plane = state.planes[state.activePlaneIndex];
+    const isCalibratingVirtual = plane && plane.isVirtual && (plane.points.length < 2 || state.isCalibVertVirtualPlane || state.isTiltingVirtualPlane);
+
+    if (isCalibratingVirtual) {
       handleVirtualPlaneClick(imgX, imgY);
     } else {
+      if (plane && !plane.H) {
+        toast('Calibrá la base del plano virtual primero haciendo clic en el piso.', 'warning');
+        return;
+      }
       const point = processClickPoint(x, y);
       commitMeasurementPoint(point);
     }
@@ -727,7 +649,15 @@ function initViewer(width, height) {
       const clickX = touch.clientX - rect.left;
       const clickY = touch.clientY - rect.top - 60; // Offset Y arriba del dedo
       
-      currentTouchPoint = processClickPoint(clickX, clickY);
+      const plane = state.planes[state.activePlaneIndex];
+      if (plane && (plane.isVirtual && plane.points.length < 2)) {
+        currentTouchPoint = {
+          imgX: (clickX - state.viewer.offsetX) / state.viewer.scale,
+          imgY: (clickY - state.viewer.offsetY) / state.viewer.scale
+        };
+      } else {
+        currentTouchPoint = processClickPoint(clickX, clickY);
+      }
       drawMeasurements(pendingPoint, currentTouchPoint);
     }
   }, { passive: false });
@@ -740,7 +670,15 @@ function initViewer(width, height) {
       const clickX = touch.clientX - rect.left;
       const clickY = touch.clientY - rect.top - 60; 
       
-      currentTouchPoint = processClickPoint(clickX, clickY);
+      const plane = state.planes[state.activePlaneIndex];
+      if (plane && (plane.isVirtual && plane.points.length < 2)) {
+        currentTouchPoint = {
+          imgX: (clickX - state.viewer.offsetX) / state.viewer.scale,
+          imgY: (clickY - state.viewer.offsetY) / state.viewer.scale
+        };
+      } else {
+        currentTouchPoint = processClickPoint(clickX, clickY);
+      }
       drawMeasurements(pendingPoint, currentTouchPoint);
     }
   }, { passive: false });
@@ -755,9 +693,18 @@ function initViewer(width, height) {
         return;
       }
 
-      if (state.activeTool === 'virtual_plane') {
+      const plane = state.planes[state.activePlaneIndex];
+      const isCalibratingVirtual = plane && plane.isVirtual && (plane.points.length < 2 || state.isCalibVertVirtualPlane || state.isTiltingVirtualPlane);
+
+      if (isCalibratingVirtual) {
         handleVirtualPlaneClick(currentTouchPoint.imgX, currentTouchPoint.imgY);
       } else {
+        if (plane && !plane.H) {
+          toast('Calibrá la base del plano virtual primero haciendo clic en el piso.', 'warning');
+          currentTouchPoint = null;
+          drawMeasurements(pendingPoint);
+          return;
+        }
         commitMeasurementPoint(currentTouchPoint);
       }
       currentTouchPoint = null;
@@ -777,61 +724,132 @@ function updateViewTransform() {
   drawMeasurements();
 }
 
+function syncCanvasSizes() {
+  const mainCanvas = document.getElementById('main-image-canvas');
+  const overlayCanvas = document.getElementById('overlay-canvas');
+  const interactiveCanvas = document.getElementById('interactive-canvas');
+  if (mainCanvas && overlayCanvas) {
+    if (overlayCanvas.width !== mainCanvas.width || overlayCanvas.height !== mainCanvas.height) {
+      overlayCanvas.width = mainCanvas.width;
+      overlayCanvas.height = mainCanvas.height;
+    }
+  }
+  if (mainCanvas && interactiveCanvas) {
+    if (interactiveCanvas.width !== mainCanvas.width || interactiveCanvas.height !== mainCanvas.height) {
+      interactiveCanvas.width = mainCanvas.width;
+      interactiveCanvas.height = mainCanvas.height;
+    }
+  }
+}
+
 function drawGrid() {
+  syncCanvasSizes();
   const overlay = document.getElementById('overlay-canvas');
   if (!overlay) return;
   const ctx = overlay.getContext('2d');
   ctx.clearRect(0, 0, overlay.width, overlay.height);
 
+  if (!state.showGrid) return;
+
   const plane = state.planes[state.activePlaneIndex];
   if (!plane) return;
 
-  const H_inv = plane.H_inv;
+  let H_inv = plane.H_inv;
+  let useFallbackBase = false;
+  if (!H_inv && (plane.isVirtual || plane.isElevated)) {
+    const pb = state.planes.find(p => p.id === plane.planeBaseIndex);
+    if (pb && pb.H_inv) {
+      H_inv = pb.H_inv;
+      useFallbackBase = true;
+    }
+  }
+  if (!H_inv) return;
   const H_data = H_inv.data64F;
 
+  const isFlat = state.showFlatView && state.flatViewTransform && plane && plane.id === state.flatViewPlaneId;
+
   function project(x_mm, y_mm) {
+    if (isFlat) {
+      return {
+        x: (x_mm - state.flatViewTransform.X_min) * state.flatViewTransform.scale,
+        y: (y_mm - state.flatViewTransform.Y_min) * state.flatViewTransform.scale,
+        w: 1.0
+      };
+    }
     const w = H_data[6] * x_mm + H_data[7] * y_mm + H_data[8];
     return {
       x: (H_data[0] * x_mm + H_data[1] * y_mm + H_data[2]) / w,
-      y: (H_data[3] * x_mm + H_data[4] * y_mm + H_data[5]) / w
+      y: (H_data[3] * x_mm + H_data[4] * y_mm + H_data[5]) / w,
+      w: w
     };
   }
 
   const range = 800; // mm
   const step = 50;
+  const w_sign = isFlat ? 1.0 : (Math.sign(H_data[8]) || 1);
 
-  ctx.strokeStyle = 'rgba(110, 231, 247, 0.2)';
+  let startX = -range, endX = range;
+  let startY = -range, endY = range;
+
+  if (isFlat) {
+    startX = Math.floor(state.flatViewTransform.X_min / step) * step;
+    endX = Math.ceil(state.flatViewTransform.X_max / step) * step;
+    startY = Math.floor(state.flatViewTransform.Y_min / step) * step;
+    endY = Math.ceil(state.flatViewTransform.Y_max / step) * step;
+  }
+
+  if (plane.isVirtual && !useFallbackBase) {
+    ctx.strokeStyle = 'rgba(168, 85, 247, 0.5)'; // Purple for virtual vertical
+  } else if (plane.isElevated && !useFallbackBase) {
+    ctx.strokeStyle = 'rgba(245, 158, 11, 0.5)'; // Orange for elevated parallel
+  } else {
+    ctx.strokeStyle = 'rgba(110, 231, 247, 0.4)'; // Cyan for physical or base fallback
+  }
   ctx.lineWidth = 1 / state.viewer.scale;
   ctx.beginPath();
-  for (let x = -range; x <= range; x += step) {
-    let p1 = project(x, -range), p2 = project(x, range);
-    ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y);
+  
+  // Dibujar grilla en pequeños segmentos para evitar cruces con el horizonte
+  for (let x = startX; x <= endX; x += step) {
+    for (let y = startY; y < endY; y += step) {
+      let p1 = project(x, y), p2 = project(x, y + step);
+      if ((Math.sign(p1.w) || 1) === w_sign && (Math.sign(p2.w) || 1) === w_sign) {
+        ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y);
+      }
+    }
   }
-  for (let y = -range; y <= range; y += step) {
-    let p1 = project(-range, y), p2 = project(range, y);
-    ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y);
+  for (let y = startY; y <= endY; y += step) {
+    for (let x = startX; x < endX; x += step) {
+      let p1 = project(x, y), p2 = project(x + step, y);
+      if ((Math.sign(p1.w) || 1) === w_sign && (Math.sign(p2.w) || 1) === w_sign) {
+        ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y);
+      }
+    }
   }
   ctx.stroke();
 
   // Ejes X e Y locales (Origen ArUco)
   ctx.lineWidth = 2 / state.viewer.scale;
-  ctx.beginPath(); ctx.strokeStyle = 'rgba(248, 113, 113, 0.6)'; // Red = X
-  let pX1 = project(0, 0), pX2 = project(100, 0);
-  ctx.moveTo(pX1.x, pX1.y); ctx.lineTo(pX2.x, pX2.y); ctx.stroke();
+  ctx.beginPath(); ctx.strokeStyle = 'rgba(248, 113, 113, 0.8)'; // Red = X
+  for (let x = 0; x < 100; x += 10) {
+    let p1 = project(x, 0), p2 = project(x + 10, 0);
+    if ((Math.sign(p1.w) || 1) === w_sign && (Math.sign(p2.w) || 1) === w_sign) { ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); }
+  }
+  ctx.stroke();
 
-  ctx.beginPath(); ctx.strokeStyle = 'rgba(52, 211, 153, 0.6)'; // Green = Y
-  let pY1 = project(0, 0), pY2 = project(0, 100);
-  ctx.moveTo(pY1.x, pY1.y); ctx.lineTo(pY2.x, pY2.y); ctx.stroke();
+  ctx.beginPath(); ctx.strokeStyle = 'rgba(52, 211, 153, 0.8)'; // Green = Y
+  for (let y = 0; y < 100; y += 10) {
+    let p1 = project(0, y), p2 = project(0, y + 10);
+    if ((Math.sign(p1.w) || 1) === w_sign && (Math.sign(p2.w) || 1) === w_sign) { ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); }
+  }
+  ctx.stroke();
   
-  // Dibujar plano virtual si existe
-  if (state.virtualPlanePoints.length >= 2 && state.planes.length >= 2) {
-    const pb = state.planes.find(p => p.id === state.planeBaseIndex);
-    const pw = state.planes.find(p => p.id === state.planeWallIndex);
+  // Intersección de plano virtual en la realidad (Cyan/Naranja) para feedback visual
+  if (plane.isVirtual && plane.points.length >= 2 && state.planes.length >= 2) {
+    const pb = state.planes.find(p => p.id === plane.planeBaseIndex);
+    const pw = state.planes.find(p => p.id === plane.planeWallIndex);
     if (pb && pw) {
       const mainCanvas = document.getElementById('main-image-canvas');
       const params = getCameraParams(pb.H_inv, pw.H_inv, mainCanvas.width, mainCanvas.height);
-
-      // Proyectar los 2 puntos base al piso (coordenadas mm del plano base)
       const H_data_base = pb.H.data64F;
       const projToFloor = (pt) => {
         const w = H_data_base[6] * pt.x + H_data_base[7] * pt.y + H_data_base[8];
@@ -840,90 +858,39 @@ function drawGrid() {
           y: (H_data_base[3] * pt.x + H_data_base[4] * pt.y + H_data_base[5]) / w
         };
       };
-      const b1_mm = projToFloor(state.virtualPlanePoints[0]);
-      const b2_mm = projToFloor(state.virtualPlanePoints[1]);
+      const b1_mm = projToFloor(plane.points[0]);
+      const b2_mm = projToFloor(plane.points[1]);
 
-      // Calibrar la escala vertical en base a la intersección del plano pared con el virtual
       const calib = calibrateVirtualPlaneScale(
-        params,
-        pb.H, pb.H_inv,
-        pw.H, pw.H_inv,
-        b1_mm, b2_mm,
-        state.vanishingPointH,
-        state.vanishingPointV
+        params, pb.H, pb.H_inv, pw.H, pw.H_inv,
+        b1_mm, b2_mm, plane.vanishingPointH, plane.vanishingPointV
       );
-      params.s_v = calib.s_v;
-      state.virtualPlaneBaseIntersect = calib.P_base_intersect;
-      state.virtualPlaneTopIntersect = calib.P_top_intersect;
 
-      // Punto de fuga horizontal: si está calibrado, usarlo; si no, usar la dirección de la recta base (paralelas perfectas)
-      const hasVPH = state.vanishingPointH != null;
-
-      const stepV_mm = 50;  // paso vertical en mm
-      const nV = 20;        // cantidad de filas (1000 mm total)
-      const stepU_mm = 50;  // paso horizontal en mm
-      const nU_extra = 100; // cantidad de columnas a cada lado (suficiente para cubrir fuera del lienzo)
-
-      // Calcular la longitud de la recta base en mm
-      const dx_mm = b2_mm.x - b1_mm.x;
-      const dy_mm = b2_mm.y - b1_mm.y;
-      const lenU_mm = Math.hypot(dx_mm, dy_mm) || 1;
-
-      // Índice inicial y final en U (centrado en la recta base)
-      const iStart = -nU_extra;
-      const iEnd = Math.ceil(lenU_mm / stepU_mm) + nU_extra;
-
-      // Color de la grilla
-      const color = hasVPH ? 'rgba(168, 85, 247, 0.4)' : 'rgba(236, 72, 153, 0.4)';
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 1.5 / state.viewer.scale;
-      ctx.beginPath();
-
-      // Líneas VERTICALES de la grilla: para cada columna U, trazar línea de Z=0 a Z=nV*stepV
-      for (let i = iStart; i <= iEnd; i++) {
-        const u = i * stepU_mm;
-        const pBot = projectVirtualPlane(params, b1_mm, b2_mm, u, 0, state.vanishingPointH, state.vanishingPointV);
-        const pTop = projectVirtualPlane(params, b1_mm, b2_mm, u, nV * stepV_mm, state.vanishingPointH, state.vanishingPointV);
-        if (pBot && pTop) {
-          ctx.moveTo(pBot.x, pBot.y);
-          ctx.lineTo(pTop.x, pTop.y);
-        }
-      }
-
-      // Líneas HORIZONTALES de la grilla: para cada fila Z, trazar línea de U_min a U_max
-      for (let j = 0; j <= nV; j++) {
-        const z = j * stepV_mm;
-        const pStart = projectVirtualPlane(params, b1_mm, b2_mm, iStart * stepU_mm, z, state.vanishingPointH, state.vanishingPointV);
-        const pEnd   = projectVirtualPlane(params, b1_mm, b2_mm, iEnd * stepU_mm, z, state.vanishingPointH, state.vanishingPointV);
-        if (pStart && pEnd) {
-          ctx.moveTo(pStart.x, pStart.y);
-          ctx.lineTo(pEnd.x, pEnd.y);
-        }
-      }
-
-      ctx.stroke();
-
-      // Dibujar recta de intersección horizontal (Piso)
-      const pBaseL = projectVirtualPlane(params, b1_mm, b2_mm, iStart * stepU_mm, 0, state.vanishingPointH, state.vanishingPointV);
-      const pBaseR = projectVirtualPlane(params, b1_mm, b2_mm, iEnd * stepU_mm, 0, state.vanishingPointH, state.vanishingPointV);
-      if (pBaseL && pBaseR) {
+      if (calib && calib.P_base_intersect && calib.P_top_intersect) {
+        // Dibujar recta de intersección horizontal (Piso)
         ctx.beginPath();
         ctx.strokeStyle = '#06b6d4'; // Cyan
         ctx.lineWidth = 3 / state.viewer.scale;
-        ctx.moveTo(pBaseL.x, pBaseL.y);
-        ctx.lineTo(pBaseR.x, pBaseR.y);
-        ctx.stroke();
+        
+        const dx_mm = b2_mm.x - b1_mm.x;
+        const dy_mm = b2_mm.y - b1_mm.y;
+        const lenU_mm = Math.hypot(dx_mm, dy_mm) || 1;
+        const stepU_mm = 50;
+        const nU_extra = 100;
+        const iStart = -nU_extra;
+        const iEnd = Math.ceil(lenU_mm / stepU_mm) + nU_extra;
 
-        ctx.font = `600 ${11 / state.viewer.scale}px 'Inter', sans-serif`;
-        ctx.fillStyle = '#06b6d4';
-        ctx.textAlign = 'left';
-        ctx.fillText('Intersección Horizontal (Piso)', pBaseL.x + 10 / state.viewer.scale, pBaseL.y + 15 / state.viewer.scale);
-      }
+        const pBaseL = projectVirtualPlane(params, b1_mm, b2_mm, iStart * stepU_mm, 0, plane.vanishingPointH, plane.vanishingPointV);
+        const pBaseR = projectVirtualPlane(params, b1_mm, b2_mm, iEnd * stepU_mm, 0, plane.vanishingPointH, plane.vanishingPointV);
+        if (pBaseL && pBaseR) {
+          ctx.moveTo(pBaseL.x, pBaseL.y);
+          ctx.lineTo(pBaseR.x, pBaseR.y);
+          ctx.stroke();
+        }
 
-      // Dibujar recta de intersección vertical (Pared)
-      if (state.virtualPlaneBaseIntersect && state.virtualPlaneTopIntersect) {
-        const p1 = state.virtualPlaneBaseIntersect;
-        const p2 = state.virtualPlaneTopIntersect;
+        // Dibujar recta de intersección vertical (Pared)
+        const p1 = calib.P_base_intersect;
+        const p2 = calib.P_top_intersect;
         const dx = p2.x - p1.x;
         const dy = p2.y - p1.y;
         const len = Math.hypot(dx, dy) || 1;
@@ -934,13 +901,8 @@ function drawGrid() {
         ctx.strokeStyle = '#f97316'; // Orange
         ctx.lineWidth = 3 / state.viewer.scale;
         ctx.moveTo(p1.x, p1.y);
-        ctx.lineTo(p1.x + nx * 5000, p1.y + ny * 5000); // extender hacia arriba
+        ctx.lineTo(p1.x + nx * 5000, p1.y + ny * 5000);
         ctx.stroke();
-
-        ctx.font = `600 ${11 / state.viewer.scale}px 'Inter', sans-serif`;
-        ctx.fillStyle = '#f97316';
-        ctx.textAlign = 'left';
-        ctx.fillText('Intersección Vertical (Pared)', p1.x + 10 / state.viewer.scale, p1.y - 10 / state.viewer.scale);
       }
     }
   }
@@ -1094,124 +1056,129 @@ function drawMeasurements(pendingPoint = null, currentTouchPoint = null) {
   });
 
   // Puntos base del plano virtual
-  state.virtualPlanePoints.forEach((pt, index) => {
-    ctx.beginPath();
-    ctx.arc(pt.x, pt.y, r * 1.5, 0, 2 * Math.PI);
-    ctx.fillStyle = '#facc15';
-    ctx.fill();
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth = strokeW;
-    ctx.stroke();
-    
-    ctx.font = `600 ${12 / state.viewer.scale}px 'Inter', sans-serif`;
-    ctx.fillStyle = '#facc15';
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(`Base ${index+1}`, pt.x, pt.y - (12/state.viewer.scale));
-  });
-  
-  if (state.virtualPlanePoints.length === 2) {
-    const p1 = state.virtualPlanePoints[0];
-    const p2 = state.virtualPlanePoints[1];
-    const dx = p2.x - p1.x;
-    const dy = p2.y - p1.y;
-    const len = Math.hypot(dx, dy) || 1;
-    const nx = dx / len;
-    const ny = dy / len;
-    
-    // Extender 5000 pixeles
-    const startX = p1.x - nx * 5000;
-    const startY = p1.y - ny * 5000;
-    const endX = p2.x + nx * 5000;
-    const endY = p2.y + ny * 5000;
-
-    ctx.beginPath();
-    ctx.moveTo(startX, startY);
-    ctx.lineTo(endX, endY);
-    ctx.strokeStyle = '#facc15';
-    ctx.lineWidth = strokeW;
-    ctx.setLineDash([5 / state.viewer.scale, 5 / state.viewer.scale]);
-    ctx.stroke();
-    ctx.setLineDash([]);
-  }
-
-  // Recta de referencia de perspectiva horizontal (paralela a la base)
-  if (state.virtualPlaneTiltPoints && state.virtualPlaneTiltPoints.length >= 2) {
-    const tp1 = state.virtualPlaneTiltPoints[0];
-    const tp2 = state.virtualPlaneTiltPoints[1];
-    const tdx = tp2.x - tp1.x;
-    const tdy = tp2.y - tp1.y;
-    const tlen = Math.hypot(tdx, tdy) || 1;
-    const tnx = tdx / tlen; const tny = tdy / tlen;
-    ctx.beginPath();
-    ctx.moveTo(tp1.x - tnx * 5000, tp1.y - tny * 5000);
-    ctx.lineTo(tp2.x + tnx * 5000, tp2.y + tny * 5000);
-    ctx.strokeStyle = '#a855f7';
-    ctx.lineWidth = strokeW;
-    ctx.setLineDash([5 / state.viewer.scale, 5 / state.viewer.scale]);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    // Puntos
-    [tp1, tp2].forEach(pt => {
-      ctx.beginPath(); ctx.arc(pt.x, pt.y, r, 0, 2*Math.PI);
-      ctx.fillStyle = '#a855f7'; ctx.fill();
-      ctx.strokeStyle = '#fff'; ctx.lineWidth = strokeW/2; ctx.stroke();
-    });
-    const mx = (tp1.x + tp2.x) / 2, my = (tp1.y + tp2.y) / 2;
-    ctx.font = `600 ${12 / state.viewer.scale}px 'Inter', sans-serif`;
-    ctx.fillStyle = '#a855f7'; ctx.textAlign = 'center';
-    ctx.fillText('↔ Fuga H', mx, my - (14/state.viewer.scale));
-  }
-
-  // Recta de referencia vertical
-  if (state.vanishingPointVPoints && state.vanishingPointVPoints.length >= 2) {
-    const vp1 = state.vanishingPointVPoints[0];
-    const vp2 = state.vanishingPointVPoints[1];
-    const vdx = vp2.x - vp1.x;
-    const vdy = vp2.y - vp1.y;
-    const vlen = Math.hypot(vdx, vdy) || 1;
-    const vnx = vdx / vlen; const vny = vdy / vlen;
-    ctx.beginPath();
-    ctx.moveTo(vp1.x - vnx * 5000, vp1.y - vny * 5000);
-    ctx.lineTo(vp2.x + vnx * 5000, vp2.y + vny * 5000);
-    ctx.strokeStyle = '#34d399';
-    ctx.lineWidth = strokeW;
-    ctx.setLineDash([5 / state.viewer.scale, 5 / state.viewer.scale]);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    [vp1, vp2].forEach(pt => {
-      ctx.beginPath(); ctx.arc(pt.x, pt.y, r, 0, 2*Math.PI);
-      ctx.fillStyle = '#34d399'; ctx.fill();
-      ctx.strokeStyle = '#fff'; ctx.lineWidth = strokeW/2; ctx.stroke();
-    });
-    const mx = (vp1.x + vp2.x) / 2, my = (vp1.y + vp2.y) / 2;
-    ctx.font = `600 ${12 / state.viewer.scale}px 'Inter', sans-serif`;
-    ctx.fillStyle = '#34d399'; ctx.textAlign = 'center';
-    ctx.fillText('↕ Fuga V (Recta 1)', mx, my - (14/state.viewer.scale));
-
-    if (state.vanishingPointVPoints.length >= 4) {
-      const vp3 = state.vanishingPointVPoints[2];
-      const vp4 = state.vanishingPointVPoints[3];
-      const vdx2 = vp4.x - vp3.x;
-      const vdy2 = vp4.y - vp3.y;
-      const vlen2 = Math.hypot(vdx2, vdy2) || 1;
-      const vnx2 = vdx2 / vlen2; const vny2 = vdy2 / vlen2;
+  if (plane.isVirtual) {
+    const vPts = plane.points || [];
+    vPts.forEach((pt, index) => {
       ctx.beginPath();
-      ctx.moveTo(vp3.x - vnx2 * 5000, vp3.y - vny2 * 5000);
-      ctx.lineTo(vp4.x + vnx2 * 5000, vp4.y + vny2 * 5000);
+      ctx.arc(pt.x, pt.y, r * 1.5, 0, 2 * Math.PI);
+      ctx.fillStyle = '#facc15';
+      ctx.fill();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = strokeW;
+      ctx.stroke();
+      
+      ctx.font = `600 ${12 / state.viewer.scale}px 'Inter', sans-serif`;
+      ctx.fillStyle = '#facc15';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(`Base ${index+1}`, pt.x, pt.y - (12/state.viewer.scale));
+    });
+    
+    if (vPts.length === 2) {
+      const p1 = vPts[0];
+      const p2 = vPts[1];
+      const dx = p2.x - p1.x;
+      const dy = p2.y - p1.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const nx = dx / len;
+      const ny = dy / len;
+      
+      // Extender 5000 pixeles
+      const startX = p1.x - nx * 5000;
+      const startY = p1.y - ny * 5000;
+      const endX = p2.x + nx * 5000;
+      const endY = p2.y + ny * 5000;
+
+      ctx.beginPath();
+      ctx.moveTo(startX, startY);
+      ctx.lineTo(endX, endY);
+      ctx.strokeStyle = '#facc15';
+      ctx.lineWidth = strokeW;
+      ctx.setLineDash([5 / state.viewer.scale, 5 / state.viewer.scale]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Recta de referencia de perspectiva horizontal (paralela a la base)
+    const tPts = plane.virtualPlaneTiltPoints || [];
+    if (tPts.length >= 2) {
+      const tp1 = tPts[0];
+      const tp2 = tPts[1];
+      const tdx = tp2.x - tp1.x;
+      const tdy = tp2.y - tp1.y;
+      const tlen = Math.hypot(tdx, tdy) || 1;
+      const tnx = tdx / tlen; const tny = tdy / tlen;
+      ctx.beginPath();
+      ctx.moveTo(tp1.x - tnx * 5000, tp1.y - tny * 5000);
+      ctx.lineTo(tp2.x + tnx * 5000, tp2.y + tny * 5000);
+      ctx.strokeStyle = '#a855f7';
+      ctx.lineWidth = strokeW;
+      ctx.setLineDash([5 / state.viewer.scale, 5 / state.viewer.scale]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // Puntos
+      [tp1, tp2].forEach(pt => {
+        ctx.beginPath(); ctx.arc(pt.x, pt.y, r, 0, 2*Math.PI);
+        ctx.fillStyle = '#a855f7'; ctx.fill();
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = strokeW/2; ctx.stroke();
+      });
+      const mx = (tp1.x + tp2.x) / 2, my = (tp1.y + tp2.y) / 2;
+      ctx.font = `600 ${12 / state.viewer.scale}px 'Inter', sans-serif`;
+      ctx.fillStyle = '#a855f7'; ctx.textAlign = 'center';
+      ctx.fillText('↔ Fuga H', mx, my - (14/state.viewer.scale));
+    }
+
+    // Recta de referencia vertical
+    const vvPts = plane.vanishingPointVPoints || [];
+    if (vvPts.length >= 2) {
+      const vp1 = vvPts[0];
+      const vp2 = vvPts[1];
+      const vdx = vp2.x - vp1.x;
+      const vdy = vp2.y - vp1.y;
+      const vlen = Math.hypot(vdx, vdy) || 1;
+      const vnx = vdx / vlen; const vny = vdy / vlen;
+      ctx.beginPath();
+      ctx.moveTo(vp1.x - vnx * 5000, vp1.y - vny * 5000);
+      ctx.lineTo(vp2.x + vnx * 5000, vp2.y + vny * 5000);
       ctx.strokeStyle = '#34d399';
       ctx.lineWidth = strokeW;
       ctx.setLineDash([5 / state.viewer.scale, 5 / state.viewer.scale]);
       ctx.stroke();
       ctx.setLineDash([]);
-      [vp3, vp4].forEach(pt => {
+      [vp1, vp2].forEach(pt => {
         ctx.beginPath(); ctx.arc(pt.x, pt.y, r, 0, 2*Math.PI);
         ctx.fillStyle = '#34d399'; ctx.fill();
         ctx.strokeStyle = '#fff'; ctx.lineWidth = strokeW/2; ctx.stroke();
       });
-      const mx2 = (vp3.x + vp4.x) / 2, my2 = (vp3.y + vp4.y) / 2;
+      const mx = (vp1.x + vp2.x) / 2, my = (vp1.y + vp2.y) / 2;
       ctx.font = `600 ${12 / state.viewer.scale}px 'Inter', sans-serif`;
       ctx.fillStyle = '#34d399'; ctx.textAlign = 'center';
-      ctx.fillText('↕ Fuga V (Recta 2)', mx2, my2 - (14/state.viewer.scale));
+      ctx.fillText('↕ Fuga V (Recta 1)', mx, my - (14/state.viewer.scale));
+
+      if (vvPts.length >= 4) {
+        const vp3 = vvPts[2];
+        const vp4 = vvPts[3];
+        const vdx2 = vp4.x - vp3.x;
+        const vdy2 = vp4.y - vp3.y;
+        const vlen2 = Math.hypot(vdx2, vdy2) || 1;
+        const vnx2 = vdx2 / vlen2; const vny2 = vdy2 / vlen2;
+        ctx.beginPath();
+        ctx.moveTo(vp3.x - vnx2 * 5000, vp3.y - vny2 * 5000);
+        ctx.lineTo(vp4.x + vnx2 * 5000, vp4.y + vny2 * 5000);
+        ctx.strokeStyle = '#34d399';
+        ctx.lineWidth = strokeW;
+        ctx.setLineDash([5 / state.viewer.scale, 5 / state.viewer.scale]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        [vp3, vp4].forEach(pt => {
+          ctx.beginPath(); ctx.arc(pt.x, pt.y, r, 0, 2*Math.PI);
+          ctx.fillStyle = '#34d399'; ctx.fill();
+          ctx.strokeStyle = '#fff'; ctx.lineWidth = strokeW/2; ctx.stroke();
+        });
+        const mx2 = (vp3.x + vp4.x) / 2, my2 = (vp3.y + vp4.y) / 2;
+        ctx.font = `600 ${12 / state.viewer.scale}px 'Inter', sans-serif`;
+        ctx.fillStyle = '#34d399'; ctx.textAlign = 'center';
+        ctx.fillText('↕ Fuga V (Recta 2)', mx2, my2 - (14/state.viewer.scale));
+      }
     }
   }
 
@@ -1647,30 +1614,38 @@ function exportMeasurementsCSV() {
    CONSTRUCCIÓN DEL CARD DE RESULTADO
    ───────────────────────────────────────────────────────────── */
 
-function createPlaneSidebarButton(index, scale, templateName) {
-  const label = `Plano ${index + 1} (${templateName})`;
-  const list  = document.getElementById('planes-list');
-  if (!list) return label;
+function updatePlaneListUI() {
+  const list = document.getElementById('planes-list');
+  if (!list) return;
+  list.innerHTML = '';
 
-  const btn = document.createElement('button');
-  btn.className = 'plane-btn';
-  btn.id = `btn-plane-${index}`;
-  btn.type = 'button';
-  
-  btn.innerHTML = `
-    <span class="plane-btn-title">
-      <span class="planes-badge">${index + 1}</span>
-      ${escHtml(label)}
-    </span>
-    <span class="plane-btn-meta">${scale.toFixed(2)} px/mm</span>
-  `;
+  state.planes.forEach((p, index) => {
+    const btn = document.createElement('button');
+    btn.className = 'plane-btn';
+    btn.id = `btn-plane-${index}`;
+    btn.type = 'button';
 
-  btn.addEventListener('click', () => {
-    setActivePlane(index);
+    let meta = `${p.scale.toFixed(2)} px/mm`;
+    if (p.isVirtual) meta = 'Plano Alzado';
+    if (p.isElevated) meta = `Plano Elevado (${p.elevationHeight} mm)`;
+
+    btn.innerHTML = `
+      <span class="plane-btn-title">
+        <span class="planes-badge">${index + 1}</span>
+        ${escHtml(p.label)}
+      </span>
+      <span class="plane-btn-meta">${meta}</span>
+    `;
+
+    btn.addEventListener('click', () => {
+      setActivePlane(index);
+    });
+
+    list.appendChild(btn);
   });
 
-  list.appendChild(btn);
-  return label;
+  const countEl = document.getElementById('planes-count');
+  if (countEl) countEl.textContent = state.planes.length;
 }
 
 function setActivePlane(index) {
@@ -1680,8 +1655,90 @@ function setActivePlane(index) {
   const activeBtn = document.getElementById(`btn-plane-${index}`);
   if (activeBtn) activeBtn.classList.add('active');
 
+  updatePlaneSelectors3DVisibility();
+  if (state.showFlatView) {
+    updateFlatView();
+  } else {
+    const mainCanvas = document.getElementById('main-image-canvas');
+    if (mainCanvas && state.originalImageMat) {
+      cv.imshow(mainCanvas, state.originalImageMat);
+    }
+  }
   drawGrid();
   drawMeasurements();
+}
+
+function updatePlaneSelectors3DVisibility() {
+  const plane = state.planes[state.activePlaneIndex];
+  const selectors3d = document.getElementById('plane-selectors-3d');
+  const btnResetVirtual = document.getElementById('btn-reset-virtual');
+  const btnTiltVirtual = document.getElementById('btn-tilt-virtual');
+  const btnCalibVertVirtual = document.getElementById('btn-calib-vert-virtual');
+
+  // Rellenar selectores 3D con planos físicos reales (no virtuales ni elevados)
+  const selBase = document.getElementById('select-plane-base');
+  const selWall = document.getElementById('select-plane-wall');
+  if (selBase && selWall) {
+    const activeBaseVal = selBase.value;
+    const activeWallVal = selWall.value;
+    
+    selBase.innerHTML = '';
+    selWall.innerHTML = '';
+
+    const physicalPlanes = state.planes.filter(p => !p.isVirtual && !p.isElevated);
+    physicalPlanes.forEach(p => {
+      const opt1 = document.createElement('option');
+      opt1.value = p.id;
+      opt1.textContent = p.label;
+      selBase.appendChild(opt1);
+
+      const opt2 = document.createElement('option');
+      opt2.value = p.id;
+      opt2.textContent = p.label;
+      selWall.appendChild(opt2);
+    });
+
+    if (plane && (plane.isVirtual || plane.isElevated)) {
+      selBase.value = plane.planeBaseIndex;
+      selWall.value = plane.planeWallIndex;
+    } else {
+      if (activeBaseVal) selBase.value = activeBaseVal;
+      if (activeWallVal) selWall.value = activeWallVal;
+    }
+  }
+
+  if (plane && plane.isVirtual) {
+    if (selectors3d) selectors3d.style.display = 'flex';
+    if (btnResetVirtual) btnResetVirtual.style.display = 'inline-block';
+    
+    // Solo mostrar calibración de perspectiva si tiene al menos 2 puntos
+    if (btnTiltVirtual) {
+      btnTiltVirtual.style.display = plane.points.length >= 2 ? 'inline-block' : 'none';
+    }
+    if (btnCalibVertVirtual) {
+      btnCalibVertVirtual.style.display = plane.points.length >= 2 ? 'inline-block' : 'none';
+    }
+  } else if (plane && plane.isElevated) {
+    if (selectors3d) selectors3d.style.display = 'flex';
+    if (btnResetVirtual) btnResetVirtual.style.display = 'none';
+    if (btnTiltVirtual) btnTiltVirtual.style.display = 'none';
+    if (btnCalibVertVirtual) btnCalibVertVirtual.style.display = 'none';
+  } else {
+    if (selectors3d) selectors3d.style.display = 'none';
+    if (btnResetVirtual) btnResetVirtual.style.display = 'none';
+    if (btnTiltVirtual) btnTiltVirtual.style.display = 'none';
+    if (btnCalibVertVirtual) btnCalibVertVirtual.style.display = 'none';
+  }
+
+  // Actualizar botones de editar/borrar
+  const btnRename = document.getElementById('btn-rename-plane');
+  if (btnRename) {
+    btnRename.style.display = (plane && (plane.isVirtual || plane.isElevated)) ? 'inline-block' : 'none';
+  }
+  const btnDelete = document.getElementById('btn-delete-plane');
+  if (btnDelete) {
+    btnDelete.style.display = (plane && (plane.isVirtual || plane.isElevated)) ? 'inline-block' : 'none';
+  }
 }
 
 /* ─────────────────────────────────────────────────────────────
@@ -1766,8 +1823,8 @@ async function processImage(source) {
       const H_inv = new cv.Mat();
       cv.invert(H, H_inv, cv.DECOMP_LU);
 
-      const label = createPlaneSidebarButton(i, scale, sheet.template.name);
-      state.planes.push({ id: i, label, H: H.clone(), H_inv, scale, template: sheet.template, sheetCenter });
+      const label = `Plano Base ${i + 1} (${sheet.template.name})`;
+      state.planes.push({ id: i, label, H: H.clone(), H_inv, scale, template: sheet.template, sheetCenter, isVirtual: false, isElevated: false });
 
       H.delete();
       await yieldToUI();
@@ -1777,53 +1834,21 @@ async function processImage(source) {
 
     const count = state.planes.length;
     if (count > 0) {
-      document.getElementById('planes-count').textContent = String(count);
       document.getElementById('upload-view').classList.add('hidden');
       document.getElementById('workspace-view').classList.add('visible');
       document.getElementById('measurements-section').classList.add('visible');
       
       initViewer(width, height);
-      setActivePlane(0);
+      updatePlaneListUI();
       
-      // Update 3D Selectors
-      const selBase = document.getElementById('select-plane-base');
-      const selWall = document.getElementById('select-plane-wall');
-      selBase.innerHTML = '';
-      selWall.innerHTML = '';
-      
-      // Selectors UI
       if (count >= 2) {
-        document.getElementById('plane-selectors-3d').style.display = state.activeTool === 'virtual_plane' ? 'flex' : 'none';
-        state.planes.forEach((p, idx) => {
-          const opt1 = document.createElement('option');
-          opt1.value = p.id;
-          opt1.textContent = p.label.replace(/<[^>]*>?/gm, ''); // strip HTML
-          selBase.appendChild(opt1);
-          
-          const opt2 = document.createElement('option');
-          opt2.value = p.id;
-          opt2.textContent = p.label.replace(/<[^>]*>?/gm, '');
-          selWall.appendChild(opt2);
-        });
-        
-        selBase.value = state.planes[0].id;
-        selWall.value = state.planes[1].id;
-        state.planeBaseIndex = 0;
-        state.planeWallIndex = 1;
-        
-        // Listeners
-        selBase.onchange = (e) => {
-          state.planeBaseIndex = parseInt(e.target.value);
-          if (state.activeTool === 'virtual_plane') {
-            setActivePlane(state.planeBaseIndex);
-          }
-        };
-        selWall.onchange = (e) => state.planeWallIndex = parseInt(e.target.value);
+        state.planeBaseIndex = state.planes[0].id;
+        state.planeWallIndex = state.planes[1].id;
       } else {
-        document.getElementById('plane-selectors-3d').style.display = 'none';
         state.planeBaseIndex = -1;
         state.planeWallIndex = -1;
       }
+      setActivePlane(0);
       
       toast(
         `${count} plano(s) rectificado(s) correctamente.`,
@@ -1857,6 +1882,15 @@ function clearResults() {
   state.activePlaneIndex = -1;
   state.measurements = [];
   state.measIdCounter = 0;
+
+  state.showFlatView = false;
+  state.flatViewTransform = null;
+  state.flatViewPlaneId = -1;
+  const toggleFlat = document.getElementById('toggle-flat');
+  if (toggleFlat) toggleFlat.checked = false;
+  const toggleGrid = document.getElementById('toggle-grid');
+  if (toggleGrid) toggleGrid.checked = true;
+  state.showGrid = true;
   
   document.getElementById('planes-list').innerHTML = '';
   document.getElementById('planes-count').textContent = '0';
@@ -2073,110 +2107,228 @@ function initUI() {
 
   document.getElementById('btn-reset').addEventListener('click', clearResults);
 
-  const btnTool2d = document.getElementById('btn-tool-2d');
-  const btnTool3d = null; // eliminado
-  const btnToolVirtual = document.getElementById('btn-tool-virtual');
-  const btnResetVirtual = document.getElementById('btn-reset-virtual');
-  
-  if (btnTool2d && btnToolVirtual) {
-    const hideSelectors = () => {
-      const sel = document.getElementById('plane-selectors-3d');
-      if (sel) sel.style.display = 'none';
-      if (btnResetVirtual) btnResetVirtual.style.display = 'none';
-      const btnTilt = document.getElementById('btn-tilt-virtual');
-      if (btnTilt) btnTilt.style.display = 'none';
-    };
-
-    btnTool2d.addEventListener('click', () => {
-      state.activeTool = '2d';
-      btnTool2d.classList.add('active', 'btn-primary');
-      btnTool2d.classList.remove('btn-secondary');
-      btnToolVirtual.classList.remove('active', 'btn-primary');
-      btnToolVirtual.classList.add('btn-secondary');
-      
-      hideSelectors();
-      
-      state.meas3dBasePoint = null;
-      state.virtualPlanePoints = [];
-      state.virtualPlanePendingPoint = null;
-      renderMeasurements(); 
-    });
-    
-    // btn-tool-3d eliminado — redundante con Plano Virtual
-
-    btnToolVirtual.addEventListener('click', () => {
-      if (state.planes.length < 2) {
-        toast('Para planos virtuales necesitás al menos 2 planos detectados.', 'warning');
+  const btnAddVirtual = document.getElementById('btn-add-virtual');
+  if (btnAddVirtual) {
+    btnAddVirtual.addEventListener('click', () => {
+      const physicalPlanes = state.planes.filter(p => !p.isVirtual && !p.isElevated);
+      if (physicalPlanes.length < 2) {
+        toast('Para crear planos virtuales se necesitan al menos 2 planos detectados.', 'warning');
         return;
       }
-      state.activeTool = 'virtual_plane';
-      btnToolVirtual.classList.add('active', 'btn-primary');
-      btnToolVirtual.classList.remove('btn-secondary');
-      btnTool2d.classList.remove('active', 'btn-primary');
-      btnTool2d.classList.add('btn-secondary');
       
-      const selectors3d = document.getElementById('plane-selectors-3d');
-      if (selectors3d) selectors3d.style.display = 'flex';
-      if (btnResetVirtual) btnResetVirtual.style.display = 'inline-block';
-      
-      if (state.planeBaseIndex >= 0) setActivePlane(state.planeBaseIndex);
-      
-      state.meas3dBasePoint = null;
-      state.pendingPoint = null;
-      if (state.virtualPlanePoints.length === 0) {
-        toast('Hacé clic en dos puntos del piso para definir la línea base del plano virtual.', 'info');
-      }
-      renderMeasurements();
+      const newPlane = {
+        id: 'virtual_' + Date.now(),
+        label: 'Plano Alzado (Virtual) ' + (state.planes.filter(p => p.isVirtual).length + 1),
+        isVirtual: true,
+        isElevated: false,
+        points: [],
+        vanishingPointH: null,
+        vanishingPointV: null,
+        vanishingPointVPoints: [],
+        planeBaseIndex: physicalPlanes[0].id,
+        planeWallIndex: physicalPlanes[1].id,
+        H: null,
+        H_inv: null,
+        scale: physicalPlanes[0].scale,
+        sheetCenter: { x: state.originalImageMat.cols / 2, y: state.originalImageMat.rows / 2 },
+        template: { w_mm: 500, h_mm: 500, targets: [[0,0], [500,0], [500,500], [0,500]] }
+      };
+
+      state.planes.push(newPlane);
+      updatePlaneListUI();
+      setActivePlane(state.planes.length - 1);
+      toast('Hacé clic en dos puntos del piso para definir la línea base del plano virtual.', 'info');
     });
-    
-    if (btnResetVirtual) {
-      btnResetVirtual.addEventListener('click', () => {
-        state.virtualPlanePoints = [];
-        state.virtualPlanePendingPoint = null;
-        state.virtualPlaneNormal = null;
-        state.vanishingPointH = null;
-        state.vanishingPointV = null;
-        state.vanishingPointVPoints = null;
-        state.isTiltingVirtualPlane = false;
-        state.isCalibVertVirtualPlane = false;
-        state.virtualPlaneTiltPoints = [];
-        const btnTilt = document.getElementById('btn-tilt-virtual');
-        if (btnTilt) btnTilt.style.display = 'none';
-        const btnCalibV = document.getElementById('btn-calib-vert-virtual');
-        if (btnCalibV) btnCalibV.style.display = 'none';
-        toast('Plano virtual reiniciado. Marcá dos puntos nuevos en el piso.', 'info');
-        renderMeasurements();
+  }
+
+  const btnAddElevated = document.getElementById('btn-add-elevated');
+  if (btnAddElevated) {
+    btnAddElevated.addEventListener('click', () => {
+      const physicalPlanes = state.planes.filter(p => !p.isVirtual && !p.isElevated);
+      if (physicalPlanes.length < 2) {
+        toast('Para crear planos elevados se necesitan al menos 2 planos detectados.', 'warning');
+        return;
+      }
+      
+      const heightInput = prompt('Ingresá la elevación en milímetros (mm):', '150');
+      if (heightInput === null) return;
+      const heightMm = parseFloat(heightInput);
+      if (isNaN(heightMm) || heightMm <= 0) {
+        toast('Altura inválida.', 'error');
+        return;
+      }
+
+      const pb = physicalPlanes[0];
+      const pw = physicalPlanes[1];
+
+      const newPlane = {
+        id: 'elevated_' + Date.now(),
+        label: `Plano Elevado (${heightMm} mm)`,
+        isVirtual: false,
+        isElevated: true,
+        elevationHeight: heightMm,
+        planeBaseIndex: pb.id,
+        planeWallIndex: pw.id,
+        H: null,
+        H_inv: null,
+        scale: pb.scale,
+        sheetCenter: { x: state.originalImageMat.cols / 2, y: state.originalImageMat.rows / 2 },
+        template: { w_mm: 500, h_mm: 500, targets: [[0,0], [500,0], [500,500], [0,500]] }
+      };
+
+      const res = computeElevatedPlaneH(pb, pw, heightMm);
+      if (res) {
+        newPlane.H = res.H;
+        newPlane.H_inv = res.H_inv;
+        newPlane.scale = res.scale;
+      } else {
+        toast('No se pudo calcular la proyección del plano elevado.', 'error');
+        return;
+      }
+
+      state.planes.push(newPlane);
+      updatePlaneListUI();
+      setActivePlane(state.planes.length - 1);
+      toast(`Plano elevado a ${heightMm} mm creado con éxito.`, 'success');
+    });
+  }
+
+  const btnRenamePlane = document.getElementById('btn-rename-plane');
+  if (btnRenamePlane) {
+    btnRenamePlane.addEventListener('click', () => {
+      const plane = state.planes[state.activePlaneIndex];
+      if (!plane) return;
+      const newName = prompt('Nuevo nombre para el plano:', plane.label);
+      if (newName && newName.trim()) {
+        plane.label = newName.trim();
+        updatePlaneListUI();
+        setActivePlane(state.activePlaneIndex);
+      }
+    });
+  }
+
+  const btnDeletePlane = document.getElementById('btn-delete-plane');
+  if (btnDeletePlane) {
+    btnDeletePlane.addEventListener('click', () => {
+      const plane = state.planes[state.activePlaneIndex];
+      if (!plane) return;
+      if (!plane.isVirtual && !plane.isElevated) {
+        toast('No se pueden eliminar planos detectados automáticamente.', 'warning');
+        return;
+      }
+      if (confirm(`¿Estás seguro de que querés eliminar el plano "${plane.label}"?`)) {
+        if (plane.H) plane.H.delete();
+        if (plane.H_inv) plane.H_inv.delete();
+
+        state.measurements = state.measurements.filter(m => m.planeId !== plane.id);
+        
+        state.planes.splice(state.activePlaneIndex, 1);
+        updatePlaneListUI();
+        setActivePlane(Math.max(0, state.activePlaneIndex - 1));
+        renderMeasurementTable();
+        toast('Plano eliminado.', 'info');
+      }
+    });
+  }
+
+  const btnResetVirtual = document.getElementById('btn-reset-virtual');
+  if (btnResetVirtual) {
+    btnResetVirtual.addEventListener('click', () => {
+      const plane = state.planes[state.activePlaneIndex];
+      if (!plane || !plane.isVirtual) return;
+
+      plane.points = [];
+      plane.vanishingPointH = null;
+      plane.vanishingPointV = null;
+      plane.vanishingPointVPoints = [];
+      plane.virtualPlaneTiltPoints = [];
+      if (plane.H) { plane.H.delete(); plane.H = null; }
+      if (plane.H_inv) { plane.H_inv.delete(); plane.H_inv = null; }
+
+      state.isTiltingVirtualPlane = false;
+      state.isCalibVertVirtualPlane = false;
+      
+      toast('Plano virtual reiniciado. Marcá dos puntos nuevos en el piso.', 'info');
+      updatePlaneSelectors3DVisibility();
+      drawGrid();
+      drawMeasurements();
+    });
+  }
+
+  const btnTiltVirtual = document.getElementById('btn-tilt-virtual');
+  if (btnTiltVirtual) {
+    btnTiltVirtual.addEventListener('click', () => {
+      const plane = state.planes[state.activePlaneIndex];
+      if (!plane || !plane.isVirtual) return;
+      if (plane.points.length < 2) {
+        toast('Primero definí la base del plano en el piso (2 clics).', 'warning');
+        return;
+      }
+      state.isTiltingVirtualPlane = true;
+      state.isCalibVertVirtualPlane = false;
+      plane.virtualPlaneTiltPoints = [];
+      toast('Modo perspectiva: Marcá 2 puntos sobre una línea que sea paralela a la recta base en la realidad.', 'info');
+    });
+  }
+
+  const btnCalibVertVirtual = document.getElementById('btn-calib-vert-virtual');
+  if (btnCalibVertVirtual) {
+    btnCalibVertVirtual.addEventListener('click', () => {
+      const plane = state.planes[state.activePlaneIndex];
+      if (!plane || !plane.isVirtual) return;
+      if (plane.points.length < 2) {
+        toast('Primero definí la base del plano en el piso (2 clics).', 'warning');
+        return;
+      }
+      state.isCalibVertVirtualPlane = true;
+      state.isTiltingVirtualPlane = false;
+      plane.vanishingPointVPoints = [];
+      toast('Ajuste vertical: Marcá 2 rectas verticales en la realidad. Hacé clic en 2 puntos para la primera, y 2 puntos para la segunda.', 'info');
+    });
+  }
+
+  const selBase = document.getElementById('select-plane-base');
+  if (selBase) {
+    selBase.addEventListener('change', (e) => {
+      const plane = state.planes[state.activePlaneIndex];
+      if (plane && (plane.isVirtual || plane.isElevated)) {
+        plane.planeBaseIndex = parseInt(e.target.value);
+        recomputeVirtualPlane(plane);
         drawGrid();
-      });
-    }
+        drawMeasurements();
+      }
+    });
+  }
 
-    const btnTiltVirtual = document.getElementById('btn-tilt-virtual');
-    if (btnTiltVirtual) {
-      btnTiltVirtual.addEventListener('click', () => {
-        if (state.virtualPlanePoints.length < 2) {
-          toast('Primero definí la base del plano en el piso (2 clics).', 'warning');
-          return;
-        }
-        state.isTiltingVirtualPlane = true;
-        state.isCalibVertVirtualPlane = false;
-        state.virtualPlaneTiltPoints = [];
-        toast('Modo perspectiva: Marcá 2 puntos sobre una línea que sea paralela a la recta base en la realidad.', 'info');
-      });
-    }
+  const selWall = document.getElementById('select-plane-wall');
+  if (selWall) {
+    selWall.addEventListener('change', (e) => {
+      const plane = state.planes[state.activePlaneIndex];
+      if (plane && (plane.isVirtual || plane.isElevated)) {
+        plane.planeWallIndex = parseInt(e.target.value);
+        recomputeVirtualPlane(plane);
+        drawGrid();
+        drawMeasurements();
+      }
+    });
+  }
 
-    const btnCalibVertVirtual = document.getElementById('btn-calib-vert-virtual');
-    if (btnCalibVertVirtual) {
-      btnCalibVertVirtual.addEventListener('click', () => {
-        if (state.virtualPlanePoints.length < 2) {
-          toast('Primero definí la base del plano en el piso (2 clics).', 'warning');
-          return;
-        }
-        state.isCalibVertVirtualPlane = true;
-        state.isTiltingVirtualPlane = false;
-        state.vanishingPointVPoints = [];
-        toast('Ajuste vertical: Marcá 2 rectas verticales en la realidad. Hacé clic en 2 puntos para la primera, y 2 puntos para la segunda.', 'info');
-      });
-    }
+  const toggleGrid = document.getElementById('toggle-grid');
+  if (toggleGrid) {
+    toggleGrid.addEventListener('change', (e) => {
+      state.showGrid = e.target.checked;
+      drawGrid();
+    });
+  }
+
+  const toggleFlat = document.getElementById('toggle-flat');
+  if (toggleFlat) {
+    toggleFlat.addEventListener('change', (e) => {
+      state.showFlatView = e.target.checked;
+      updateFlatView();
+      drawGrid();
+      drawMeasurements();
+    });
   }
 
   const btnExportPng = document.getElementById('btn-export-png');
@@ -2510,3 +2662,349 @@ function printTemplateSheet(templateName) {
     printWindow.document.close();
   }
 }
+
+function recomputeVirtualPlane(plane) {
+  if (plane.isElevated) {
+    const pb = state.planes.find(p => p.id === plane.planeBaseIndex);
+    const pw = state.planes.find(p => p.id === plane.planeWallIndex);
+    if (!pb || !pw) return;
+    
+    const res = computeElevatedPlaneH(pb, pw, plane.elevationHeight);
+    if (res) {
+      if (plane.H) plane.H.delete();
+      if (plane.H_inv) plane.H_inv.delete();
+      plane.H = res.H;
+      plane.H_inv = res.H_inv;
+      plane.scale = res.scale;
+    }
+  } else if (plane.isVirtual) {
+    if (plane.points.length < 2) {
+      plane.H = null;
+      plane.H_inv = null;
+      return;
+    }
+    const pb = state.planes.find(p => p.id === plane.planeBaseIndex);
+    const pw = state.planes.find(p => p.id === plane.planeWallIndex);
+    if (!pb || !pw) return;
+
+    const res = computeVirtualVerticalPlaneH(pb, pw, plane);
+    if (res) {
+      if (plane.H) plane.H.delete();
+      if (plane.H_inv) plane.H_inv.delete();
+      plane.H = res.H;
+      plane.H_inv = res.H_inv;
+      plane.scale = res.scale;
+    }
+  }
+}
+
+function computeVirtualVerticalPlaneH(pb, pw, plane) {
+  const mainCanvas = document.getElementById('main-image-canvas');
+  const params = getCameraParams(pb.H_inv, pw.H_inv, mainCanvas.width, mainCanvas.height);
+
+  const H_data_base = pb.H.data64F;
+  const projToFloor = (pt) => {
+    const w = H_data_base[6] * pt.x + H_data_base[7] * pt.y + H_data_base[8];
+    return {
+      x: (H_data_base[0] * pt.x + H_data_base[1] * pt.y + H_data_base[2]) / w,
+      y: (H_data_base[3] * pt.x + H_data_base[4] * pt.y + H_data_base[5]) / w
+    };
+  };
+  const b1_mm = projToFloor(plane.points[0]);
+  const b2_mm = projToFloor(plane.points[1]);
+
+  const calib = calibrateVirtualPlaneScale(
+    params, pb.H, pb.H_inv, pw.H, pw.H_inv,
+    b1_mm, b2_mm, plane.vanishingPointH, plane.vanishingPointV
+  );
+  params.s_v = calib.s_v;
+
+  const A_px = projectVirtualPlane(params, b1_mm, b2_mm, 0, 0, plane.vanishingPointH, plane.vanishingPointV);
+  const B_px = projectVirtualPlane(params, b1_mm, b2_mm, 200, 0, plane.vanishingPointH, plane.vanishingPointV);
+  const C_px = projectVirtualPlane(params, b1_mm, b2_mm, 200, 200, plane.vanishingPointH, plane.vanishingPointV);
+  const D_px = projectVirtualPlane(params, b1_mm, b2_mm, 0, 200, plane.vanishingPointH, plane.vanishingPointV);
+
+  if (!A_px || !B_px || !C_px || !D_px) return null;
+
+  const srcPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
+    A_px.x, A_px.y,
+    B_px.x, B_px.y,
+    C_px.x, C_px.y,
+    D_px.x, D_px.y,
+  ]);
+  const dstPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
+    0, 0,
+    200, 0,
+    200, 200,
+    0, 200,
+  ]);
+
+  const H = cv.findHomography(srcPts, dstPts);
+  const H_inv = new cv.Mat();
+  cv.invert(H, H_inv, cv.DECOMP_LU);
+
+  srcPts.delete();
+  dstPts.delete();
+
+  return { H, H_inv, scale: pb.scale };
+}
+
+function computeElevatedPlaneH(pb, pw, heightMm) {
+  const mainCanvas = document.getElementById('main-image-canvas');
+  const params = getCameraParams(pb.H_inv, pw.H_inv, mainCanvas.width, mainCanvas.height);
+
+  const A_px = project3D(params, 0, 0, heightMm);
+  const B_px = project3D(params, 200, 0, heightMm);
+  const C_px = project3D(params, 200, 200, heightMm);
+  const D_px = project3D(params, 0, 200, heightMm);
+
+  if (!A_px || !B_px || !C_px || !D_px) return null;
+
+  const srcPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
+    A_px.x, A_px.y,
+    B_px.x, B_px.y,
+    C_px.x, C_px.y,
+    D_px.x, D_px.y,
+  ]);
+  const dstPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
+    0, 0,
+    200, 0,
+    200, 200,
+    0, 200,
+  ]);
+
+  const H = cv.findHomography(srcPts, dstPts);
+  const H_inv = new cv.Mat();
+  cv.invert(H, H_inv, cv.DECOMP_LU);
+
+  srcPts.delete();
+  dstPts.delete();
+
+  return { H, H_inv, scale: pb.scale };
+}
+
+function updateFlatView() {
+  const mainCanvas = document.getElementById('main-image-canvas');
+  if (!mainCanvas || !state.originalImageMat) return;
+
+  if (state.showFlatView) {
+    const plane = state.planes[state.activePlaneIndex];
+    if (!plane) {
+      toast('Seleccioná un plano para ver la vista plana', 'info');
+      document.getElementById('toggle-flat').checked = false;
+      state.showFlatView = false;
+      return;
+    }
+
+    showProcessing('Generando vista plana...', 'Esto puede tardar unos segundos');
+    setTimeout(() => {
+      try {
+        let bbox;
+        if (!plane.H) {
+          throw new Error("El plano seleccionado no está calibrado.");
+        }
+        const h_data = plane.H.data64F;
+        if (state.exportAreaPoints && state.exportAreaPoints.length === 2) {
+          const pt1 = applyH(h_data, state.exportAreaPoints[0].imgX, state.exportAreaPoints[0].imgY);
+          const pt2 = applyH(h_data, state.exportAreaPoints[1].imgX, state.exportAreaPoints[1].imgY);
+          bbox = computeBBox([{mm: pt1}, {mm: pt2}]);
+        } else {
+          const targets = (plane.template && plane.template.targets && plane.template.targets.length > 0)
+            ? plane.template.targets
+            : [[-500,-500], [500,-500], [500,500], [-500,500]];
+          const validPoints = conformalFilter(plane.H, state.originalImageMat.cols, state.originalImageMat.rows, plane.sheetCenter, targets);
+          bbox = computeBBox(validPoints);
+        }
+
+        const canvasW = Math.round(bbox.X_max - bbox.X_min);
+        const canvasH = Math.round(bbox.Y_max - bbox.Y_min);
+        const MAX_DIM = 4000;
+        
+        let actualScale = plane.scale;
+        const widthPx = canvasW * actualScale;
+        const heightPx = canvasH * actualScale;
+        if (widthPx > MAX_DIM || heightPx > MAX_DIM) {
+           actualScale = Math.min(MAX_DIM / canvasW, MAX_DIM / canvasH);
+        }
+
+        renderPlane(state.originalImageMat, plane.H, actualScale, bbox, mainCanvas);
+
+        state.flatViewTransform = {
+          X_min: bbox.X_min,
+          Y_min: bbox.Y_min,
+          scale: actualScale,
+          H_inv: plane.H_inv
+        };
+        
+        state.flatViewPlaneId = plane.id;
+
+        document.getElementById('btn-zoom-fit').click();
+        hideProcessing();
+        toast('Vista plana activada. 1 px = ' + (1/actualScale).toFixed(2) + ' mm.', 'success');
+      } catch (e) {
+        hideProcessing();
+        toast('Error al generar vista plana: ' + e.message, 'error');
+        document.getElementById('toggle-flat').checked = false;
+        state.showFlatView = false;
+        cv.imshow(mainCanvas, state.originalImageMat);
+      }
+    }, 50);
+
+  } else {
+    cv.imshow(mainCanvas, state.originalImageMat);
+    state.flatViewTransform = null;
+    state.flatViewPlaneId = -1;
+    document.getElementById('btn-zoom-fit').click();
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   GUARDAR / CARGAR PROYECTO
+   ───────────────────────────────────────────────────────────── */
+
+document.addEventListener('DOMContentLoaded', () => {
+  const btnSave = document.getElementById('btn-save-project');
+  if (btnSave) {
+    btnSave.addEventListener('click', async () => {
+      if (!state.originalImageMat || state.planes.length === 0) {
+        toast('No hay un proyecto activo para guardar.', 'info');
+        return;
+      }
+      showProcessing('Guardando proyecto...', 'Por favor esperá');
+
+      const tmpCanvas = document.createElement('canvas');
+      cv.imshow(tmpCanvas, state.originalImageMat);
+      const dataUrl = tmpCanvas.toDataURL('image/jpeg', 0.85);
+
+      const planesData = state.planes.map(p => {
+        const item = {
+          id: p.id,
+          label: p.label,
+          scale: p.scale,
+          isVirtual: !!p.isVirtual,
+          isElevated: !!p.isElevated,
+          sheetCenter: p.sheetCenter,
+        };
+        if (p.H) item.H_data = Array.from(p.H.data64F);
+        if (p.H_inv) item.H_inv_data = Array.from(p.H_inv.data64F);
+        if (p.template) item.templateName = p.template.name;
+        
+        if (p.isVirtual) {
+          item.points = p.points;
+          item.vanishingPointH = p.vanishingPointH;
+          item.vanishingPointV = p.vanishingPointV;
+          item.vanishingPointVPoints = p.vanishingPointVPoints;
+          item.virtualPlaneTiltPoints = p.virtualPlaneTiltPoints;
+          item.planeBaseIndex = p.planeBaseIndex;
+          item.planeWallIndex = p.planeWallIndex;
+        }
+        
+        if (p.isElevated) {
+          item.elevationHeight = p.elevationHeight;
+          item.planeBaseIndex = p.planeBaseIndex;
+          item.planeWallIndex = p.planeWallIndex;
+        }
+
+        return item;
+      });
+
+      const projectData = {
+        version: "2.0",
+        image: dataUrl,
+        planes: planesData,
+        measurements: state.measurements,
+        measIdCounter: state.measIdCounter,
+        activePlaneIndex: state.activePlaneIndex,
+        planeBaseIndex: state.planeBaseIndex,
+        planeWallIndex: state.planeWallIndex
+      };
+
+      const jsonStr = JSON.stringify(projectData);
+      const blob = new Blob([jsonStr], { type: 'application/json' });
+      downloadBlob(blob, `mobius_project_${new Date().toISOString().slice(0,10)}.json`);
+      hideProcessing();
+      toast('Proyecto guardado con éxito.', 'success');
+    });
+  }
+
+  const btnLoad = document.getElementById('btn-load-project');
+  const fileInput = document.getElementById('project-input');
+  if (btnLoad && fileInput) {
+    btnLoad.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      showProcessing('Cargando proyecto...', 'Leyendo archivo');
+      try {
+        const text = await file.text();
+        const data = JSON.parse(text);
+        
+        clearResults();
+        
+        const img = new Image();
+        img.onload = () => {
+          const tmp = document.createElement('canvas');
+          tmp.width = img.width; tmp.height = img.height;
+          const ctx = tmp.getContext('2d');
+          ctx.drawImage(img, 0, 0);
+          state.originalImageMat = cv.imread(tmp);
+          
+          state.planes = data.planes.map(p => {
+            const item = {
+              id: p.id,
+              label: p.label,
+              scale: p.scale,
+              isVirtual: !!p.isVirtual,
+              isElevated: !!p.isElevated,
+              sheetCenter: p.sheetCenter,
+              template: p.templateName ? { name: p.templateName } : { w_mm: 500, h_mm: 500, targets: [[0,0], [500,0], [500,500], [0,500]] }
+            };
+            if (p.H_data) item.H = cv.matFromArray(3, 3, cv.CV_64F, p.H_data);
+            if (p.H_inv_data) item.H_inv = cv.matFromArray(3, 3, cv.CV_64F, p.H_inv_data);
+            
+            if (p.isVirtual) {
+              item.points = p.points || [];
+              item.vanishingPointH = p.vanishingPointH;
+              item.vanishingPointV = p.vanishingPointV;
+              item.vanishingPointVPoints = p.vanishingPointVPoints || [];
+              item.virtualPlaneTiltPoints = p.virtualPlaneTiltPoints || [];
+              item.planeBaseIndex = p.planeBaseIndex;
+              item.planeWallIndex = p.planeWallIndex;
+            }
+            
+            if (p.isElevated) {
+              item.elevationHeight = p.elevationHeight;
+              item.planeBaseIndex = p.planeBaseIndex;
+              item.planeWallIndex = p.planeWallIndex;
+            }
+
+            return item;
+          });
+          
+          state.measurements = data.measurements || [];
+          state.measIdCounter = data.measIdCounter || 0;
+          state.planeBaseIndex = data.planeBaseIndex;
+          state.planeWallIndex = data.planeWallIndex;
+          
+          document.getElementById('upload-view').classList.add('hidden');
+          document.getElementById('workspace-view').classList.add('visible');
+          document.getElementById('measurements-section').classList.add('visible');
+          
+          updatePlaneListUI();
+          initViewer(img.width, img.height);
+          setActivePlane(data.activePlaneIndex || 0);
+          
+          hideProcessing();
+          toast('Proyecto cargado.', 'success');
+        };
+        img.onerror = () => { throw new Error("Fallo al cargar la imagen del proyecto"); };
+        img.src = data.image;
+        
+      } catch (err) {
+        hideProcessing();
+        toast('Error al cargar proyecto: ' + err.message, 'error');
+      }
+      fileInput.value = ''; // reset
+    });
+  }
+});

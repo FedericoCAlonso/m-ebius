@@ -5,7 +5,7 @@
    ============================================================ */
 'use strict';
 
-const CACHE_VERSION    = 'v17';
+const CACHE_VERSION    = 'v20';
 const APP_CACHE_NAME   = `mobius-app-${CACHE_VERSION}`;
 const CV_CACHE_NAME    = `mobius-opencv-${CACHE_VERSION}`;
 
@@ -65,15 +65,33 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // ② Assets de la propia app: cache-first
+  // ② Assets de la propia app: network-first
   if (url.origin === self.location.origin) {
-    event.respondWith(cacheFirst(request, APP_CACHE_NAME));
+    event.respondWith(networkFirst(request, APP_CACHE_NAME));
     return;
   }
 
   // ③ Cualquier otra request: network normal (fonts de Google, etc.)
   // No cacheamos fuentes externas aquí; el navegador lo hace solo.
 });
+
+/**
+ * Estrategia Network-First.
+ */
+async function networkFirst(request, cacheName) {
+  const cache = await caches.open(cacheName);
+  try {
+    const response = await fetch(request);
+    if (response.ok && request.method === 'GET') {
+      cache.put(request, response.clone());
+    }
+    return response;
+  } catch (err) {
+    const cached = await cache.match(request);
+    if (cached) return cached;
+    throw err;
+  }
+}
 
 /**
  * Estrategia Cache-First con actualización en background.

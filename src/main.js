@@ -77,7 +77,8 @@ const state = {
   showFlatView: false,
   flatViewTransform: null,
   flatViewPlaneId: -1,
-  showGrid: true
+  showGrid: true,
+  dragModeEnabled: false
 };
 
 /* ─────────────────────────────────────────────────────────────
@@ -283,7 +284,8 @@ function initViewer(width, height) {
 
   // Pan (Arrastrar) - MOUSE
   wrapper.addEventListener('mousedown', e => {
-    if (e.button !== 1 && e.button !== 2) return; 
+    const isDragButton = e.button === 1 || e.button === 2 || (state.dragModeEnabled && e.button === 0);
+    if (!isDragButton) return; 
     e.preventDefault();
     state.viewer.isDragging = true;
     state.viewer.startX = e.clientX - state.viewer.offsetX;
@@ -301,12 +303,13 @@ function initViewer(width, height) {
   });
 
   window.addEventListener('mouseup', e => {
-    if (e.button !== 1 && e.button !== 2) return;
+    const isDragButton = e.button === 1 || e.button === 2 || (state.dragModeEnabled && e.button === 0);
+    if (!isDragButton) return;
     state.viewer.isDragging = false;
-    wrapper.style.cursor = '';
+    wrapper.style.cursor = state.dragModeEnabled ? 'grab' : '';
   });
 
-  // Pan y Zoom - TOUCH (2 dedos)
+  // Pan y Zoom - TOUCH (2 dedos, o 1 dedo en modo arrastre)
   let initialPinchDist = null;
   let initialScale = null;
 
@@ -322,6 +325,12 @@ function initViewer(width, height) {
       state.viewer.isDragging = true;
       state.viewer.startX = cx - state.viewer.offsetX;
       state.viewer.startY = cy - state.viewer.offsetY;
+    } else if (e.touches.length === 1 && state.dragModeEnabled) {
+      e.preventDefault();
+      const t = e.touches[0];
+      state.viewer.isDragging = true;
+      state.viewer.startX = t.clientX - state.viewer.offsetX;
+      state.viewer.startY = t.clientY - state.viewer.offsetY;
     }
   }, { passive: false });
 
@@ -349,11 +358,22 @@ function initViewer(width, height) {
       state.viewer.offsetY = cy - state.viewer.startY;
       
       updateViewTransform();
+    } else if (e.touches.length === 1 && state.dragModeEnabled && state.viewer.isDragging) {
+      e.preventDefault();
+      const t = e.touches[0];
+      state.viewer.offsetX = t.clientX - state.viewer.startX;
+      state.viewer.offsetY = t.clientY - state.viewer.startY;
+      updateViewTransform();
     }
   }, { passive: false });
 
   wrapper.addEventListener('touchend', e => {
-    if (e.touches.length < 2) {
+    if (e.touches.length === 0) {
+      initialPinchDist = null;
+      state.viewer.isDragging = false;
+    } else if (e.touches.length === 1 && state.dragModeEnabled) {
+      initialPinchDist = null;
+    } else if (e.touches.length < 2) {
       initialPinchDist = null;
       state.viewer.isDragging = false;
     }
@@ -368,6 +388,24 @@ function initViewer(width, height) {
     state.viewer.offsetY = (rect.height - height * state.viewer.scale) / 2;
     updateViewTransform();
   };
+
+  const btnDrag = document.getElementById('btn-drag-toggle');
+  if (btnDrag) {
+    btnDrag.onclick = () => {
+      state.dragModeEnabled = !state.dragModeEnabled;
+      if (state.dragModeEnabled) {
+        btnDrag.style.background = 'var(--primary)';
+        btnDrag.style.color = 'white';
+        btnDrag.title = 'Modo Navegación/Arrastre (Activado)';
+        wrapper.style.cursor = 'grab';
+      } else {
+        btnDrag.style.background = '';
+        btnDrag.style.color = '';
+        btnDrag.title = 'Modo Navegación/Arrastre (Desactivado)';
+        wrapper.style.cursor = '';
+      }
+    };
+  }
 
   function zoomByCenter(factor) {
     const r = wrapper.getBoundingClientRect();
@@ -612,6 +650,7 @@ function initViewer(width, height) {
 
   // Medición - MOUSE
   overlayCanvas.addEventListener('mousedown', e => {
+    if (state.dragModeEnabled) return;
     if (e.button !== 0 || e.shiftKey || e.ctrlKey) return; 
     const rect = wrapper.getBoundingClientRect();
     const x = e.clientX - rect.left;
@@ -642,6 +681,7 @@ function initViewer(width, height) {
 
   // Medición - TOUCH (1 dedo)
   overlayCanvas.addEventListener('touchstart', e => {
+    if (state.dragModeEnabled) return;
     if (e.touches.length === 1) {
       e.preventDefault(); 
       const rect = wrapper.getBoundingClientRect();
@@ -663,6 +703,7 @@ function initViewer(width, height) {
   }, { passive: false });
 
   overlayCanvas.addEventListener('touchmove', e => {
+    if (state.dragModeEnabled) return;
     if (e.touches.length === 1 && currentTouchPoint) {
       e.preventDefault();
       const rect = wrapper.getBoundingClientRect();
@@ -684,6 +725,7 @@ function initViewer(width, height) {
   }, { passive: false });
 
   overlayCanvas.addEventListener('touchend', e => {
+    if (state.dragModeEnabled) return;
     if (e.changedTouches.length === 1 && currentTouchPoint) {
       e.preventDefault();
       if (state.isSelectingExportArea) {
@@ -844,7 +886,7 @@ function drawGrid() {
   ctx.stroke();
   
   // Intersección de plano virtual en la realidad (Cyan/Naranja) para feedback visual
-  if (plane.isVirtual && plane.points.length >= 2 && state.planes.length >= 2) {
+  if (!isFlat && plane.isVirtual && plane.points.length >= 2 && state.planes.length >= 2) {
     const pb = state.planes.find(p => p.id === plane.planeBaseIndex);
     const pw = state.planes.find(p => p.id === plane.planeWallIndex);
     if (pb && pw) {
@@ -918,6 +960,29 @@ function drawMeasurements(pendingPoint = null, currentTouchPoint = null) {
   const plane = state.planes[state.activePlaneIndex];
   if (!plane) return;
 
+  const isFlat = state.showFlatView && state.flatViewTransform && plane && plane.id === state.flatViewPlaneId;
+  const H_inv = plane.H_inv;
+  const H_data = H_inv ? H_inv.data64F : null;
+
+  function project(pt) {
+    if (isFlat) {
+      return {
+        x: (pt.x_mm - state.flatViewTransform.X_min) * state.flatViewTransform.scale,
+        y: (pt.y_mm - state.flatViewTransform.Y_min) * state.flatViewTransform.scale
+      };
+    }
+    // Si no es vista plana y tiene la coordenada original de la imagen, usarla
+    if (pt.imgX !== undefined && pt.imgY !== undefined) {
+      return { x: pt.imgX, y: pt.imgY };
+    }
+    if (!H_data) return { x: 0, y: 0 };
+    const w = H_data[6] * pt.x_mm + H_data[7] * pt.y_mm + H_data[8];
+    return {
+      x: (H_data[0] * pt.x_mm + H_data[1] * pt.y_mm + H_data[2]) / w,
+      y: (H_data[3] * pt.x_mm + H_data[4] * pt.y_mm + H_data[5]) / w
+    };
+  }
+
   const planeMeasurements = state.measurements.filter(m => m.planeId === plane.id);
   // Medidas del plano virtual (separadas)
   const virtualMeasurements = state.measurements.filter(m => m.isVirtual);
@@ -925,7 +990,8 @@ function drawMeasurements(pendingPoint = null, currentTouchPoint = null) {
   const r = 4 / state.viewer.scale;
 
   const drawPt = (p) => {
-    ctx.beginPath(); ctx.arc(p.imgX, p.imgY, r, 0, 2*Math.PI);
+    const pt = project(p);
+    ctx.beginPath(); ctx.arc(pt.x, pt.y, r, 0, 2*Math.PI);
     ctx.fillStyle = '#6ee7f7'; ctx.fill();
     ctx.strokeStyle = '#fff'; ctx.lineWidth = strokeW/2; ctx.stroke();
   };
@@ -933,25 +999,22 @@ function drawMeasurements(pendingPoint = null, currentTouchPoint = null) {
   planeMeasurements.forEach(m => {
     if (m.isAuto) return; 
     
-    const is3D = m.is3D;
     const p1 = m.points[0], p2 = m.points[1];
-    
-    // Adaptar formato de puntos
-    const x1 = is3D ? p1.x : p1.imgX;
-    const y1 = is3D ? p1.y : p1.imgY;
-    const x2 = is3D ? p2.x : p2.imgX;
-    const y2 = is3D ? p2.y : p2.imgY;
+    const pt1 = project(p1);
+    const pt2 = project(p2);
+    const x1 = pt1.x, y1 = pt1.y;
+    const x2 = pt2.x, y2 = pt2.y;
     
     ctx.beginPath(); ctx.arc(x1, y1, r, 0, 2*Math.PI);
-    ctx.fillStyle = is3D ? '#00ffcc' : '#6ee7f7'; ctx.fill();
+    ctx.fillStyle = '#6ee7f7'; ctx.fill();
     ctx.strokeStyle = '#fff'; ctx.lineWidth = strokeW/2; ctx.stroke();
     
     ctx.beginPath(); ctx.arc(x2, y2, r, 0, 2*Math.PI);
-    ctx.fillStyle = is3D ? '#00ffcc' : '#6ee7f7'; ctx.fill();
+    ctx.fillStyle = '#6ee7f7'; ctx.fill();
     ctx.strokeStyle = '#fff'; ctx.lineWidth = strokeW/2; ctx.stroke();
 
     ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
-    ctx.strokeStyle = is3D ? '#00ffcc' : '#6ee7f7'; ctx.lineWidth = strokeW;
+    ctx.strokeStyle = '#6ee7f7'; ctx.lineWidth = strokeW;
     ctx.setLineDash([8 / state.viewer.scale, 5 / state.viewer.scale]);
     ctx.stroke(); ctx.setLineDash([]);
     
@@ -961,7 +1024,6 @@ function drawMeasurements(pendingPoint = null, currentTouchPoint = null) {
     ctx.fillStyle = '#fff';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     
-    // Fondo de texto para mejor lectura
     const text = `${m.distMm.toFixed(1)} mm`;
     const txtMetrics = ctx.measureText(text);
     const textW = txtMetrics.width;
@@ -969,7 +1031,7 @@ function drawMeasurements(pendingPoint = null, currentTouchPoint = null) {
     ctx.fillStyle = 'rgba(0,0,0,0.5)';
     ctx.fillRect(midX - textW/2 - 4/state.viewer.scale, midY - textH/2 - 12/state.viewer.scale, textW + 8/state.viewer.scale, textH + 4/state.viewer.scale);
     
-    ctx.fillStyle = is3D ? '#00ffcc' : '#fff';
+    ctx.fillStyle = '#fff';
     ctx.fillText(text, midX, midY - (10/state.viewer.scale));
   });
 
@@ -979,7 +1041,9 @@ function drawMeasurements(pendingPoint = null, currentTouchPoint = null) {
   // Dibujar medidas del plano virtual
   virtualMeasurements.forEach(m => {
     const p1 = m.points[0], p2 = m.points[1];
-    const x1 = p1.x, y1 = p1.y, x2 = p2.x, y2 = p2.y;
+    const pt1 = project(p1);
+    const pt2 = project(p2);
+    const x1 = pt1.x, y1 = pt1.y, x2 = pt2.x, y2 = pt2.y;
 
     ctx.beginPath(); ctx.arc(x1, y1, r * 1.2, 0, 2*Math.PI);
     ctx.fillStyle = '#f59e0b'; ctx.fill();
@@ -1009,7 +1073,7 @@ function drawMeasurements(pendingPoint = null, currentTouchPoint = null) {
   });
 
   // Pending virtual plane point
-  if (state.virtualPlanePendingPoint && state.mode === 'virtualPlane' && !state.isTiltingVirtualPlane) {
+  if (!isFlat && state.virtualPlanePendingPoint && state.mode === 'virtualPlane' && !state.isTiltingVirtualPlane) {
     const pp = state.virtualPlanePendingPoint;
     ctx.beginPath(); ctx.arc(pp.x, pp.y, r * 1.2, 0, 2*Math.PI);
     ctx.fillStyle = '#f59e0b'; ctx.fill();
@@ -1017,13 +1081,15 @@ function drawMeasurements(pendingPoint = null, currentTouchPoint = null) {
   }
 
   if (pendingPoint && currentTouchPoint) {
-    ctx.beginPath(); ctx.moveTo(pendingPoint.imgX, pendingPoint.imgY); ctx.lineTo(currentTouchPoint.imgX, currentTouchPoint.imgY);
+    const pt1 = project(pendingPoint);
+    const pt2 = project(currentTouchPoint);
+    ctx.beginPath(); ctx.moveTo(pt1.x, pt1.y); ctx.lineTo(pt2.x, pt2.y);
     ctx.strokeStyle = '#f87171'; ctx.lineWidth = strokeW;
     ctx.stroke();
     
     const distMm = Math.hypot(currentTouchPoint.x_mm - pendingPoint.x_mm, currentTouchPoint.y_mm - pendingPoint.y_mm);
-    const midX = (pendingPoint.imgX + currentTouchPoint.imgX) / 2;
-    const midY = (pendingPoint.imgY + currentTouchPoint.imgY) / 2;
+    const midX = (pt1.x + pt2.x) / 2;
+    const midY = (pt1.y + pt2.y) / 2;
     ctx.font = `600 ${14 / state.viewer.scale}px 'Inter', sans-serif`;
     ctx.fillStyle = '#f87171';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -1034,29 +1100,43 @@ function drawMeasurements(pendingPoint = null, currentTouchPoint = null) {
   planeMeasurements.forEach(m => {
     if (m.isAuto && m.box) {
       const box = m.box;
-      const imgX = box.x1;
-      const imgY = box.y1;
-      const imgW = box.w;
-      const imgH = box.h;
+      
+      let x1, y1, x2, y2;
+      if (isFlat) {
+        const pt1 = project(m.points[0]);
+        const pt2 = project(m.points[1]);
+        x1 = Math.min(pt1.x, pt2.x);
+        y1 = Math.min(pt1.y, pt2.y);
+        x2 = Math.max(pt1.x, pt2.x);
+        y2 = Math.max(pt1.y, pt2.y);
+      } else {
+        x1 = box.x1;
+        y1 = box.y1;
+        x2 = box.x1 + box.w;
+        y2 = box.y1 + box.h;
+      }
+      
+      const imgW = x2 - x1;
+      const imgH = y2 - y1;
 
       ctx.strokeStyle = '#facc15'; // Amarillo
       ctx.lineWidth = 2 / state.viewer.scale;
-      ctx.strokeRect(imgX, imgY, imgW, imgH);
+      ctx.strokeRect(x1, y1, imgW, imgH);
       
       const labelH = 20 / state.viewer.scale;
       ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-      ctx.fillRect(imgX, imgY - labelH, imgW, labelH);
+      ctx.fillRect(x1, y1 - labelH, imgW, labelH);
       ctx.fillStyle = '#facc15';
       ctx.font = `${12 / state.viewer.scale}px 'Inter', sans-serif`;
       ctx.textAlign = 'left';
       ctx.textBaseline = 'middle';
       const scorePct = (box.score * 100).toFixed(0);
-      ctx.fillText(`${box.label} [${scorePct}%] - W:${m.distMm.toFixed(0)}mm`, imgX + (4 / state.viewer.scale), imgY - (labelH / 2));
+      ctx.fillText(`${box.label} [${scorePct}%] - W:${m.distMm.toFixed(0)}mm`, x1 + (4 / state.viewer.scale), y1 - (labelH / 2));
     }
   });
 
   // Puntos base del plano virtual
-  if (plane.isVirtual) {
+  if (!isFlat && plane.isVirtual) {
     const vPts = plane.points || [];
     vPts.forEach((pt, index) => {
       ctx.beginPath();

@@ -5,7 +5,7 @@
    ============================================================ */
 'use strict';
 
-const CACHE_VERSION    = 'v21';
+const CACHE_VERSION    = 'v22';
 const APP_CACHE_NAME   = `mobius-app-${CACHE_VERSION}`;
 const CV_CACHE_NAME    = `mobius-opencv-${CACHE_VERSION}`;
 

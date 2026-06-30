@@ -1986,7 +1986,62 @@ function clearResults() {
   renderMeasurementTable();
 }
 
-let levelListener = null;
+let cameraInterval = null;
+
+function estimateDistanceToSheet(sheet, width, height) {
+  // Coordenadas 3D de los marcadores en el espacio de la hoja (mm)
+  const targets = sheet.template.targets;
+  const objPtsData = [
+    targets[0][0], targets[0][1], 0,
+    targets[1][0], targets[1][1], 0,
+    targets[2][0], targets[2][1], 0,
+    targets[3][0], targets[3][1], 0
+  ];
+  
+  // Coordenadas 2D de los centros detectados (px)
+  const c = sheet.markers.map(m => m.center);
+  const imgPtsData = [
+    c[0].x, c[0].y,
+    c[1].x, c[1].y,
+    c[2].x, c[2].y,
+    c[3].x, c[3].y
+  ];
+
+  const objectPoints = cv.matFromArray(4, 1, cv.CV_32FC3, objPtsData);
+  const imagePoints = cv.matFromArray(4, 1, cv.CV_32FC2, imgPtsData);
+
+  // Matriz de cámara K aproximada
+  const f = 0.85 * width;
+  const cx = width / 2;
+  const cy = height / 2;
+  const cameraMatrix = cv.matFromArray(3, 3, cv.CV_64F, [
+    f, 0, cx,
+    0, f, cy,
+    0, 0, 1
+  ]);
+
+  const distCoeffs = new cv.Mat();
+  const rvec = new cv.Mat();
+  const tvec = new cv.Mat();
+
+  try {
+    cv.solvePnP(objectPoints, imagePoints, cameraMatrix, distCoeffs, rvec, tvec, false, cv.SOLVEPNP_ITERATIVE);
+    const tx = tvec.doubleAt(0, 0);
+    const ty = tvec.doubleAt(1, 0);
+    const tz = tvec.doubleAt(2, 0);
+    return Math.hypot(tx, ty, tz);
+  } catch (e) {
+    console.error('[Möbius Debug] PnP Error:', e);
+    return null;
+  } finally {
+    objectPoints.delete();
+    imagePoints.delete();
+    cameraMatrix.delete();
+    distCoeffs.delete();
+    rvec.delete();
+    tvec.delete();
+  }
+}
 
 /* ─────────────────────────────────────────────────────────────
    CÁMARA (getUserMedia)
@@ -2011,65 +2066,50 @@ async function openCamera() {
     await video.play();
     overlay.classList.add('visible');
 
-    const levelContainer = document.getElementById('camera-level-container');
-    const bubble = document.getElementById('camera-level-bubble');
-    const text = document.getElementById('camera-level-text');
-    const btnEnable = document.getElementById('btn-enable-sensors');
-    
-    if(levelContainer) levelContainer.style.opacity = '1';
+    const badge = document.getElementById('camera-distance-badge');
+    const val = document.getElementById('camera-distance-value');
+    if (badge) badge.style.display = 'flex';
+    if (val) val.innerText = 'Buscando hoja de referencia...';
 
-    function handleOrientation(event) {
-      if (event.beta === null || event.gamma === null) return;
-      let beta = event.beta; 
-      let gamma = event.gamma; 
-      
-      let pErr = beta - 90;
-      let rErr = gamma;
-      
-      const maxMove = 30; 
-      let bx = (rErr / 45) * maxMove; 
-      let by = (pErr / 45) * maxMove;
-      
-      const dist = Math.hypot(bx, by);
-      if (dist > maxMove) {
-        bx = (bx/dist)*maxMove;
-        by = (by/dist)*maxMove;
+    // Iniciar loop de detección en vivo para estimar distancia (a ~3 FPS)
+    const hiddenCanvas = document.createElement('canvas');
+    const hiddenCtx = hiddenCanvas.getContext('2d');
+
+    if (cameraInterval) clearInterval(cameraInterval);
+    cameraInterval = setInterval(() => {
+      if (video.paused || video.ended || !state.cameraStream || !state.cvReady) return;
+
+      hiddenCanvas.width = 640;
+      hiddenCanvas.height = 480;
+      hiddenCtx.drawImage(video, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
+
+      let srcMat;
+      try {
+        srcMat = cv.imread(hiddenCanvas);
+        const markers = detectMarkers(srcMat);
+
+        if (markers.length >= 4) {
+          const sheets = clusterIntoSheets(markers);
+          if (sheets.length > 0) {
+            const distanceMm = estimateDistanceToSheet(sheets[0], hiddenCanvas.width, hiddenCanvas.height);
+            if (distanceMm) {
+              const distM = distanceMm / 1000;
+              val.innerText = `Distancia: ${distM.toFixed(2)} m`;
+              badge.style.color = '#4ade80'; // Verde si detecta
+              badge.style.borderColor = 'rgba(74, 222, 128, 0.4)';
+              return;
+            }
+          }
+        }
+        val.innerText = 'Buscando hoja de referencia...';
+        badge.style.color = '#fff';
+        badge.style.borderColor = 'rgba(255, 255, 255, 0.1)';
+      } catch (e) {
+        console.error('[Möbius Live Preview Error]', e);
+      } finally {
+        if (srcMat) srcMat.delete();
       }
-      
-      if(bubble) bubble.style.transform = `translate(calc(-50% + ${bx}px), calc(-50% + ${by}px))`;
-      
-      const isLevel = Math.abs(pErr) < 3 && Math.abs(rErr) < 3;
-      if (isLevel) {
-        if(bubble) bubble.style.backgroundColor = '#4ade80';
-        if(text) { text.style.color = '#4ade80'; text.innerText = '¡NIVELADO!'; }
-      } else {
-        if(bubble) bubble.style.backgroundColor = '#fff';
-        if(text) { text.style.color = '#fff'; text.innerText = `${Math.abs(pErr).toFixed(0)}° v / ${Math.abs(rErr).toFixed(0)}° h`; }
-      }
-    }
-    
-    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-      if(btnEnable) {
-        btnEnable.style.display = 'block';
-        if(text) text.innerText = 'Permiso requerido';
-        btnEnable.onclick = () => {
-          DeviceOrientationEvent.requestPermission()
-            .then(res => {
-              if (res === 'granted') {
-                btnEnable.style.display = 'none';
-                window.addEventListener('deviceorientation', handleOrientation);
-                levelListener = handleOrientation;
-              } else {
-                if(text) text.innerText = 'Permiso denegado';
-              }
-            })
-            .catch(console.error);
-        };
-      }
-    } else {
-      window.addEventListener('deviceorientation', handleOrientation);
-      levelListener = handleOrientation;
-    }
+    }, 300);
 
   } catch (err) {
     console.error('[Möbius] Camera error:', err);
@@ -2084,19 +2124,20 @@ function closeCamera() {
   const overlay = document.getElementById('camera-overlay');
   const video   = document.getElementById('camera-video');
 
+  if (cameraInterval) {
+    clearInterval(cameraInterval);
+    cameraInterval = null;
+  }
+
+  const badge = document.getElementById('camera-distance-badge');
+  if (badge) badge.style.display = 'none';
+
   if (state.cameraStream) {
     state.cameraStream.getTracks().forEach(t => t.stop());
     state.cameraStream = null;
   }
   video.srcObject = null;
   overlay.classList.remove('visible');
-
-  const levelContainer = document.getElementById('camera-level-container');
-  if(levelContainer) levelContainer.style.opacity = '0';
-  if (levelListener) {
-    window.removeEventListener('deviceorientation', levelListener);
-    levelListener = null;
-  }
 }
 
 function captureFrame() {

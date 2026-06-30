@@ -341,19 +341,10 @@
   <div class="camera-wrapper" style="position: relative; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: #000;">
     <video id="camera-video" autoplay playsinline muted aria-label="Vista previa de la cámara" style="max-height: 100%; width: 100%; object-fit: contain;"></video>
     
-    <!-- Acelerómetro / Nivel de Burbuja -->
-    <div id="camera-level-container" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); pointer-events: none; opacity: 0; transition: opacity 0.3s; display: flex; flex-direction: column; align-items: center; justify-content: center;">
-      <div id="camera-level-crosshair" style="width: 60px; height: 60px; border: 2px solid rgba(255,255,255,0.7); border-radius: 50%; position: relative;">
-        <div id="camera-level-bubble" style="width: 16px; height: 16px; background: #fff; border-radius: 50%; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); transition: transform 0.1s linear, background-color 0.2s;"></div>
-        <!-- Líneas guía -->
-        <div style="position: absolute; top: 50%; left: -10px; width: 10px; height: 2px; background: rgba(255,255,255,0.7); transform: translateY(-50%);"></div>
-        <div style="position: absolute; top: 50%; right: -10px; width: 10px; height: 2px; background: rgba(255,255,255,0.7); transform: translateY(-50%);"></div>
-        <div style="position: absolute; left: 50%; top: -10px; width: 2px; height: 10px; background: rgba(255,255,255,0.7); transform: translateX(-50%);"></div>
-        <div style="position: absolute; left: 50%; bottom: -10px; width: 2px; height: 10px; background: rgba(255,255,255,0.7); transform: translateX(-50%);"></div>
-      </div>
-      <div id="camera-level-text" style="color: white; font-family: monospace; font-size: 14px; margin-top: 15px; background: rgba(0,0,0,0.5); padding: 4px 8px; border-radius: 4px; text-shadow: 1px 1px 2px black;">Activando sensores...</div>
-      <!-- Permiso iOS -->
-      <button id="btn-enable-sensors" class="btn btn-primary btn-sm" style="margin-top: 15px; display: none; pointer-events: auto;">Habilitar Sensores</button>
+    <!-- Distancia de la Cámara Badge -->
+    <div id="camera-distance-badge" style="position: absolute; top: 20px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.6); color: #fff; padding: 10px 20px; border-radius: 30px; font-family: 'Inter', sans-serif; font-size: 15px; font-weight: 600; display: none; align-items: center; gap: 8px; z-index: 1000; box-shadow: 0 4px 10px rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); pointer-events: none;">
+      <span style="font-size: 16px;">📏</span>
+      <span id="camera-distance-value">Buscando hoja de referencia...</span>
     </div>
   </div>
 
